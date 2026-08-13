@@ -76,6 +76,39 @@ def test_compare4_machinery():
         shutil.rmtree(TMP_DIR, ignore_errors=True)
 
 
+def test_plot_mixed_lengths():
+    """混合长度曲线出图：合并 20ep 与 50ep 历史时画图不应崩溃
+
+    绘图必须走子进程（plot_compare4.py 不 import torch）：
+    本测试进程里已加载 torch，进程内直接 import matplotlib 会触发
+    OpenMP 运行时冲突崩溃，见 开发计划.md 阶段 11 开发备注。
+    """
+    import subprocess
+    os.makedirs(TMP_DIR, exist_ok=True)
+    try:
+        # 构造两条长度不同的假历史（3ep 与 6ep）
+        history = {
+            "a": {"label": "方法A", "train": [3, 2, 1], "val": [3, 2, 1],
+                  "test": [3, 2, 1]},
+            "b": {"label": "方法B", "train": [6, 5, 4, 3, 2, 1],
+                  "val": [6, 5, 4, 3, 2, 1], "test": [6, 5, 4, 3, 2, 1]},
+        }
+        json_path = os.path.join(TMP_DIR, "mixed.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump({"epochs": 6, "history": history}, f, ensure_ascii=False)
+
+        png_path = os.path.join(TMP_DIR, "mixed.png")
+        script = os.path.join(ROOT, "src", "plot_compare4.py")
+        result = subprocess.run(
+            [sys.executable, script, "--json", json_path, "--out", png_path],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, f"混合长度绘图失败:\n{result.stderr}"
+        assert os.path.isfile(png_path) and os.path.getsize(png_path) > 10_000
+    finally:
+        shutil.rmtree(TMP_DIR, ignore_errors=True)
+
+
 def test_merge_rerun():
     """合并逻辑（阶段11f）：分两次各跑一组，第二次应并入第一次的结果同图对比"""
     img224 = os.path.join(TMP_DIR, "img224")

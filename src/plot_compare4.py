@@ -25,36 +25,39 @@ matplotlib.rcParams["axes.unicode_minus"] = False  # 负号正常显示
 
 
 def plot_curves(history: dict, epochs: int, out_path: str):
-    """绘制损失曲线：上排每组三条(训练/验证/测试)，下排四组验证集对比
+    """绘制损失曲线：上排每组三条(训练/验证/测试)，下排各组验证集对比
+
+    各组曲线长度可以不同（合并了不同 epoch 数的运行结果），
+    横轴按每组自己的历史长度画，短曲线自然止于自己的最后一轮。
 
     参数:
         history:  {方法名: {'label':.., 'train': [...], 'val': [...], 'test': [...]}}
-        epochs:   横轴长度（epoch 数）
+        epochs:   兼容保留参数（横轴实际按各组历史长度决定）
         out_path: 输出 PNG 路径
     """
     n = max(len(history), 1)
     # constrained_layout 自动排版；GridSpec(2, n) 上排 n 格、下排跨全列
     fig = plt.figure(figsize=(4.2 * n, 7.5), constrained_layout=True)
     gs = fig.add_gridspec(2, n)
-    xs = range(1, epochs + 1)
 
     for i, (_m, h) in enumerate(history.items()):
+        xs = range(1, len(h["train"]) + 1)  # 每组按自己的长度定横轴
         ax = fig.add_subplot(gs[0, i])
         ax.plot(xs, h["train"], label="训练", color="#1f77b4")
         ax.plot(xs, h["val"], label="验证", color="#ff7f0e")
         ax.plot(xs, h["test"], label="测试", color="#2ca02c")
-        ax.set_title(h["label"])
+        ax.set_title(f"{h['label']} ({len(h['train'])}ep)")
         ax.set_xlabel("epoch")
         ax.set_ylabel("MSE 损失")
         ax.set_yscale("log")  # 损失跨数量级下降，对数轴更易读
         ax.grid(alpha=0.3)
         ax.legend()
 
-    # 下排：四组验证集损失同图横向对比
+    # 下排：各组验证集损失同图横向对比（曲线长度可不同）
     ax_all = fig.add_subplot(gs[1, :])
     for _m, h in history.items():
-        ax_all.plot(xs, h["val"], label=h["label"])
-    ax_all.set_title("四组方案验证集损失对比（统一目标：重建原图，纯 MSE，可直接比较）")
+        ax_all.plot(range(1, len(h["val"]) + 1), h["val"], label=h["label"])
+    ax_all.set_title("各方案验证集损失对比（统一目标：重建原图，纯 MSE，可直接比较）")
     ax_all.set_xlabel("epoch")
     ax_all.set_ylabel("验证 MSE 损失")
     ax_all.set_yscale("log")
