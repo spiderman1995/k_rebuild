@@ -20,3 +20,6 @@ results/**/*.png
 分钟k线图/
 pic_to_224x224/
 tests/fixtures/
+
+# 环境自检报告（机器相关，不入库）
+env_report.txt
