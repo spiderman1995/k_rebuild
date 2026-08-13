@@ -72,3 +72,31 @@ def test_parameter_count_reasonable():
     n = model.count_parameters()
     print(f"\nCAE(latent_dim=256) 可训练参数量: {n:,}")
     assert 5_000_000 < n < 60_000_000, f"参数量 {n:,} 超出预期范围"
+
+
+def test_input_size_224():
+    """224 输入模式（阶段11b）：前向/反向 shape 正确，梯度可达"""
+    model = CAE(latent_dim=256, input_size=224)
+    x = torch.rand(2, 3, 224, 224)
+    x_hat, z = model(x)
+    assert x_hat.shape == (2, 3, 224, 224), f"224 重建 shape 错误: {x_hat.shape}"
+    assert z.shape == (2, 256)
+    assert x_hat.min() >= 0.0 and x_hat.max() <= 1.0
+    ((x_hat - x) ** 2).mean().backward()
+    for name, p in model.named_parameters():
+        assert p.grad is not None, f"224 模式参数 {name} 无梯度"
+
+
+def test_input_size_default_unchanged():
+    """回归：默认 input_size 仍为 448，旧调用方式行为不变"""
+    model = CAE(latent_dim=64)
+    assert model.input_size == 448
+    x_hat, _ = model(torch.rand(1, 3, 448, 448))
+    assert x_hat.shape == (1, 3, 448, 448)
+
+
+def test_input_size_invalid():
+    """非法 input_size 应报错而非静默构造出错误模型"""
+    import pytest
+    with pytest.raises(ValueError):
+        CAE(latent_dim=64, input_size=300)

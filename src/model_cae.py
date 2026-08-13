@@ -14,11 +14,19 @@
 import torch
 import torch.nn as nn
 
-# 编码器最深层的空间规格：448 经 6 次 stride=2 下采样 = 448 / 2^6 = 7
+# 编码器最深层的空间规格：输入边长经 N 次 stride=2 下采样到 7
+# （448 → 6 次，224 → 5 次，均收敛到 7×7）
 BOTTLENECK_CHANNELS = 512
 BOTTLENECK_SIZE = 7
 # 展平后的维度 512*7*7 = 25088，是编码器全连接层的输入
 FLAT_DIM = BOTTLENECK_CHANNELS * BOTTLENECK_SIZE * BOTTLENECK_SIZE
+
+# 各输入尺寸对应的编码器通道序列（每项一个 stride=2 卷积块，尾项须为 512）
+# 448: 6 块下采样 448→7；224: 5 块下采样 224→7
+ENCODER_CHANNELS = {
+    448: [32, 64, 128, 256, 512, 512],
+    224: [32, 64, 128, 256, 512],
+}
 
 
 def _conv_block(in_ch: int, out_ch: int) -> nn.Sequential:
@@ -59,36 +67,44 @@ class CAE(nn.Module):
         latent_dim: 特征向量 z 的维度（默认 256）。
                     这是"特征是否充分"实验的核心可调参数，
                     可从大到小尝试（512/256/128/64）找最小充分维度。
+        input_size: 输入图片边长，支持 448（默认，原图）和 224（降采样图）。
+                    两种尺寸都下采样到 512×7×7 瓶颈，仅卷积块数不同。
     """
 
-    def __init__(self, latent_dim: int = 256):
+    def __init__(self, latent_dim: int = 256, input_size: int = 448):
         super().__init__()
+        if input_size not in ENCODER_CHANNELS:
+            raise ValueError(
+                f"input_size 仅支持 {list(ENCODER_CHANNELS)}，收到 {input_size}"
+            )
         self.latent_dim = latent_dim
+        self.input_size = input_size
+        channels = ENCODER_CHANNELS[input_size]
 
         # ---------- 编码器 ----------
-        # 6 个卷积块，每块空间尺寸减半、通道数按 32→64→128→256→512→512 递增
-        self.encoder_conv = nn.Sequential(
-            _conv_block(3, 32),     # (B,3,448,448)  -> (B,32,224,224)
-            _conv_block(32, 64),    # -> (B,64,112,112)
-            _conv_block(64, 128),   # -> (B,128,56,56)
-            _conv_block(128, 256),  # -> (B,256,28,28)
-            _conv_block(256, 512),  # -> (B,512,14,14)
-            _conv_block(512, 512),  # -> (B,512,7,7)
-        )
+        # 每个卷积块空间尺寸减半；448 输入 6 块、224 输入 5 块，都收敛到 7×7
+        # 例 448: (B,3,448,448)→32×224→64×112→128×56→256×28→512×14→512×7
+        # 例 224: (B,3,224,224)→32×112→64×56→128×28→256×14→512×7
+        enc_blocks = []
+        in_ch = 3
+        for out_ch in channels:
+            enc_blocks.append(_conv_block(in_ch, out_ch))
+            in_ch = out_ch
+        self.encoder_conv = nn.Sequential(*enc_blocks)
         # 展平后压缩到 latent_dim 维特征向量
         self.encoder_fc = nn.Linear(FLAT_DIM, latent_dim)
 
         # ---------- 解码器 ----------
         # 先用全连接把 z 恢复成能 reshape 为 (512,7,7) 的向量
         self.decoder_fc = nn.Linear(latent_dim, FLAT_DIM)
-        # 6 个上采样块，与编码器对称，通道数逐步降回 3
+        # 上采样块与编码器对称：通道序列反向（如 448: 512→512→256→128→64→32）
+        # channels[::-1] 是列表反转切片；zip(rev, rev[1:]) 把相邻两项配成
+        # (in,out) 对，自然得到 len-1 个块（448:5 块 7→224；224:4 块 7→112）
+        rev = channels[::-1]
+        dec_blocks = [_deconv_block(i, o) for i, o in zip(rev, rev[1:])]
         self.decoder_conv = nn.Sequential(
-            _deconv_block(512, 512),  # (B,512,7,7)   -> (B,512,14,14)
-            _deconv_block(512, 256),  # -> (B,256,28,28)
-            _deconv_block(256, 128),  # -> (B,128,56,56)
-            _deconv_block(128, 64),   # -> (B,64,112,112)
-            _deconv_block(64, 32),    # -> (B,32,224,224)
-            nn.Upsample(scale_factor=2, mode="nearest"),  # -> (B,32,448,448)
+            *dec_blocks,                                  # 7 -> input_size/2
+            nn.Upsample(scale_factor=2, mode="nearest"),  # -> input_size
             # 输出层：3 通道 + Sigmoid 把像素约束到 [0,1]，与输入取值范围一致
             nn.Conv2d(32, 3, kernel_size=3, stride=1, padding=1),
             nn.Sigmoid(),
@@ -98,7 +114,7 @@ class CAE(nn.Module):
         """编码：图片 -> 特征向量（训练完成后单独用它做特征提取）
 
         参数:
-            x: 输入图片, shape (B, 3, 448, 448), 取值 [0, 1]
+            x: 输入图片, shape (B, 3, S, S), S=input_size(448/224), 取值 [0, 1]
         返回:
             z: 特征向量, shape (B, latent_dim)
         """
@@ -114,7 +130,7 @@ class CAE(nn.Module):
         参数:
             z: 特征向量, shape (B, latent_dim)
         返回:
-            x_hat: 重建图片, shape (B, 3, 448, 448), 取值 (0, 1)
+            x_hat: 重建图片, shape (B, 3, S, S), S=input_size, 取值 (0, 1)
         """
         feat = self.decoder_fc(z)            # (B, 25088)
         # view 把一维向量重排回卷积特征图布局; -1 表示 batch 维自动推断
@@ -125,9 +141,9 @@ class CAE(nn.Module):
         """完整前向：编码 + 解码
 
         参数:
-            x: 输入图片, shape (B, 3, 448, 448)
+            x: 输入图片, shape (B, 3, S, S), S=input_size
         返回:
-            (x_hat, z): 重建图片 (B,3,448,448) 与特征向量 (B,latent_dim)
+            (x_hat, z): 重建图片 (B,3,S,S) 与特征向量 (B,latent_dim)
         """
         z = self.encode(x)
         x_hat = self.decode(z)

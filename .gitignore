@@ -18,3 +18,5 @@ results/**/*.png
 
 # 数据不入库（本地样例数据也不推送）
 分钟k线图/
+pic_to_224x224/
+tests/fixtures/

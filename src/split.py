@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""数据划分工具（流程位置：正式训练前的数据准备，为远程 120 万张做准备）
+"""数据划分工具（流程位置：正式训练前的数据准备，为远程约 207 万张做准备）
 
-功能：把文件清单按 7:2:1 随机（但可复现）切分为训练/验证/测试集：
+功能：把文件清单按 7:1:2 随机（但可复现）切分为训练/验证/测试集：
     - 训练集：拟合模型
     - 验证集：调超参、早停
     - 测试集：只在最终验收时用一次
@@ -17,7 +17,7 @@ from src.logger import get_logger
 log = get_logger("split")
 
 
-def split_files(files, ratios=(0.7, 0.2, 0.1), seed: int = 42):
+def split_files(files, ratios=(0.7, 0.1, 0.2), seed: int = 42):
     """把文件清单随机切分为 train/val/test 三份（可复现）
 
     参数:
@@ -51,7 +51,7 @@ def split_files(files, ratios=(0.7, 0.2, 0.1), seed: int = 42):
     return train, val, test
 
 
-def split_dir(img_dir: str, ratios=(0.7, 0.2, 0.1), seed: int = 42):
+def split_dir(img_dir: str, ratios=(0.7, 0.1, 0.2), seed: int = 42):
     """扫描图片文件夹并切分（split_files 的便捷封装）
 
     参数:

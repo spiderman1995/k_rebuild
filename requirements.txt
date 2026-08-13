@@ -1,0 +1,11 @@
+# 项目依赖（本地开发机实测版本，203 安装时版本可放宽）
+# PyTorch 请按机器的 CUDA 版本从 pytorch.org 选择安装命令，例如：
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+torch>=2.0
+torchvision>=0.15
+numpy>=1.24
+pillow>=9.0
+pytorch-msssim>=1.0
+matplotlib>=3.7
+timm>=1.0
+pytest>=7.0

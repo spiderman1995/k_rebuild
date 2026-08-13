@@ -48,7 +48,7 @@ def test_evaluate_machinery():
         _make_untrained_checkpoint(ckpt_path)
         args = argparse.Namespace(
             ckpt=ckpt_path,
-            img_dir=os.path.join(ROOT, "分钟k线图"),
+            img_dir=os.path.join(ROOT, "tests", "fixtures", "kline36"),
             out_dir=out_dir,
             device="cuda" if torch.cuda.is_available() else "cpu",
         )

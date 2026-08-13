@@ -19,7 +19,7 @@ from src.dataset import KLineDataset
 from src.losses import CombinedLoss, psnr_metric, ssim_metric
 
 IMG_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "分钟k线图"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tests", "fixtures", "kline36"
 )
 
 

@@ -89,7 +89,7 @@ def test_training_writes_log_fields():
     try:
         setup_logger(log_dir=TMP_LOG_DIR)
         args = argparse.Namespace(
-            img_dir=os.path.join(ROOT, "分钟k线图"),
+            img_dir=os.path.join(ROOT, "tests", "fixtures", "kline36"),
             epochs=2, batch_size=8, lr=1e-3, latent_dim=64, alpha=1.0,
             device="cuda" if torch.cuda.is_available() else "cpu",
             ckpt_dir=tmp_ckpt, log_every=1, resume=False,

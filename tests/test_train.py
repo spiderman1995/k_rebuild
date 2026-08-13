@@ -35,7 +35,7 @@ def _smoke_args(ckpt_dir: str) -> argparse.Namespace:
     （0.0133），150 epoch（实测约 0.006）留出稳定余量。
     """
     return argparse.Namespace(
-        img_dir=os.path.join(ROOT, "分钟k线图"),
+        img_dir=os.path.join(ROOT, "tests", "fixtures", "kline36"),
         epochs=150,
         batch_size=8,
         lr=1e-3,

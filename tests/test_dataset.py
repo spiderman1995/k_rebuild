@@ -23,7 +23,7 @@ from src.dataset import KLineDataset
 
 # 项目根目录下的图片文件夹
 IMG_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "分钟k线图"
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tests", "fixtures", "kline36"
 )
 
 

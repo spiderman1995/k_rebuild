@@ -76,7 +76,7 @@ def test_experiment_machinery():
         args = argparse.Namespace(
             dims=[32, 16],  # 用极小维度，纯粹跑机制，快
             epochs=3,
-            img_dir=os.path.join(ROOT, "分钟k线图"),
+            img_dir=os.path.join(ROOT, "tests", "fixtures", "kline36"),
             out_dir=os.path.join(TMP_DIR, "results"),
             work_dir=os.path.join(TMP_DIR, "ckpt"),
             seed=42,

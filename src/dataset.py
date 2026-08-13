@@ -20,9 +20,6 @@ from torch.utils.data import Dataset
 
 from src.logger import get_logger
 
-# 数据的固定规格（用于加载时校验，防止混入异常图片）
-EXPECTED_SIZE = (448, 448)  # (宽, 高)
-
 # 模块级子 logger：日志带 'kline.dataset' 前缀
 log = get_logger("dataset")
 
@@ -40,11 +37,15 @@ class KLineDataset(Dataset):
         files:   可选的文件名清单。传入时只加载清单中的文件（用于
                  配合 split.py 构造训练/验证/测试子集）；不传则
                  加载文件夹内全部 PNG
+        size:    图片边长，默认 448（原图）；加载 pic_to_224x224 的
+                 降采样图时传 224，尺寸校验与输出 shape 随之调整
     """
 
-    def __init__(self, img_dir: str, invert: bool = False, files=None):
+    def __init__(self, img_dir: str, invert: bool = False, files=None,
+                 size: int = 448):
         self.img_dir = img_dir
         self.invert = invert
+        self.size = size
         if files is not None:
             # 按清单构造子集：校验文件确实存在，尽早暴露清单与磁盘不一致
             missing = [f for f in files if not os.path.isfile(os.path.join(img_dir, f))]
@@ -77,12 +78,13 @@ class KLineDataset(Dataset):
         name = self.files[idx]
         pil_img = Image.open(os.path.join(self.img_dir, name))
 
-        if pil_img.size != EXPECTED_SIZE:
+        expected = (self.size, self.size)
+        if pil_img.size != expected:
             # 先告警再抛错：日志文件中留下异常样本的名字，方便清洗数据
             log.warning("异常图片 %s: 尺寸 %s != 预期 %s",
-                        name, pil_img.size, EXPECTED_SIZE)
+                        name, pil_img.size, expected)
             raise ValueError(
-                f"{name} 尺寸为 {pil_img.size}，与预期 {EXPECTED_SIZE} 不符"
+                f"{name} 尺寸为 {pil_img.size}，与预期 {expected} 不符"
             )
 
         # convert('RGB') 丢弃 Alpha 通道：4 通道 RGBA -> 3 通道 RGB

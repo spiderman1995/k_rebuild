@@ -2,7 +2,7 @@
 """阶段 8 测试关卡：数据划分工具
 
 通过标准（见 开发计划.md 第二期）：
-    1. 7:2:1 比例正确（36 张 -> 25/7/4）
+    1. 7:1:2 比例正确（36 张 -> 25/4/7）
     2. 三集合互斥且并集 = 全量（不丢样本、不重复）
     3. 同种子两次切分结果完全一致（可复现）
     4. KLineDataset 支持按文件清单构造子集
@@ -19,13 +19,13 @@ from src.dataset import KLineDataset
 from src.split import split_dir, split_files
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IMG_DIR = os.path.join(ROOT, "分钟k线图")
+IMG_DIR = os.path.join(ROOT, "tests", "fixtures", "kline36")
 
 
 def test_split_ratios():
-    """36 张按 7:2:1 -> 25/7/4（round(36*0.7)=25, round(36*0.2)=7, 剩 4）"""
+    """36 张按 7:1:2 -> 25/4/7（round(36*0.7)=25, round(36*0.1)=4, 剩 7）"""
     train, val, test = split_dir(IMG_DIR)
-    assert (len(train), len(val), len(test)) == (25, 7, 4), (
+    assert (len(train), len(val), len(test)) == (25, 4, 7), (
         f"切分数量错误: {len(train)}/{len(val)}/{len(test)}"
     )
 
@@ -55,7 +55,7 @@ def test_split_reproducible():
 def test_split_invalid_inputs():
     """非法输入：比例和不为 1、空清单，都应报错而非静默"""
     with pytest.raises(ValueError):
-        split_files(["a.png"], ratios=(0.5, 0.2, 0.1))  # 和为 0.8
+        split_files(["a.png"], ratios=(0.5, 0.1, 0.2))  # 和为 0.8
     with pytest.raises(ValueError):
         split_files([])
 
