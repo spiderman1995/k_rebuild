@@ -1,0 +1,29 @@
+{
+  "epochs": 600,
+  "seed": 42,
+  "img_dir": "D:\\101_ide_work_dir\\project19_k_rebuild\\分钟k线图",
+  "rule": "PSNR>=30.0dB 且 距最优<=1.0dB 的最小维度",
+  "records": [
+    {
+      "latent_dim": 32,
+      "psnr": 32.92,
+      "ssim": 0.8653,
+      "best_loss": 0.0005189436681879064,
+      "train_seconds": 782
+    },
+    {
+      "latent_dim": 16,
+      "psnr": 34.03,
+      "ssim": 0.8669,
+      "best_loss": 0.00040057227791597444,
+      "train_seconds": 761
+    }
+  ],
+  "chosen": {
+    "latent_dim": 16,
+    "psnr": 34.03,
+    "ssim": 0.8669,
+    "best_loss": 0.00040057227791597444,
+    "train_seconds": 761
+  }
+}

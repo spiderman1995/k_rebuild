@@ -1,0 +1,20 @@
+# 模型 checkpoint：单文件数百 MB，超过 GitHub 100MB 限制，不入库
+checkpoints/
+*.pth
+
+# 运行日志
+logs/
+
+# Python 运行产物
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 测试运行中的临时目录（tests/ 下以 _ 开头的目录均为临时产物）
+tests/_*/
+
+# 评估产出的对比图可由 evaluate.py 重新生成，只保留实验结论 JSON
+results/**/*.png
+
+# 数据不入库（本地样例数据也不推送）
+分钟k线图/
