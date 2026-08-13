@@ -3,6 +3,7 @@
 
 收集并打印机器配置与项目运行条件，同时写入 env_report.txt 便于回传：
     - 系统 / CPU / 内存
+    - 网络：各启用网卡的 IPv4 / MAC，以及 Tailscale IP（远程连接用）
     - 各磁盘剩余空间（含 C 盘是否告急）
     - GPU（nvidia-smi）与 torch 的 CUDA 可用性
     - Python 与关键依赖包版本
@@ -16,11 +17,14 @@
 
 import argparse
 import ctypes
+import json
 import os
 import platform
 import shutil
+import socket
 import subprocess
 import sys
+import uuid
 
 REPORT_LINES = []
 
@@ -59,6 +63,60 @@ def check_system():
         ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
         say(f"物理内存: {m.ullTotalPhys / 1024**3:.1f} GB "
             f"(可用 {m.ullAvailPhys / 1024**3:.1f} GB)")
+
+
+def check_network():
+    """网络标识：各启用网卡的 IPv4/MAC + Tailscale IP（远程 SSH 连接依据）"""
+    section("网络")
+    say(f"主机名: {socket.gethostname()}")
+
+    got_detail = False
+    if platform.system() == "Windows":
+        # 用 PowerShell 查询网卡（属性名不受系统语言影响，比解析 ipconfig 稳）：
+        # 对每个已启用(Up)网卡取 名称/MAC/该网卡上的全部 IPv4，输出为 JSON
+        ps = ("Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | ForEach-Object { "
+              "[PSCustomObject]@{name=$_.Name; mac=$_.MacAddress; "
+              "ip=@((Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 "
+              "-ErrorAction SilentlyContinue).IPAddress)} } | ConvertTo-Json")
+        try:
+            out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                                 capture_output=True, text=True, timeout=30)
+            if out.returncode == 0 and out.stdout.strip():
+                data = json.loads(out.stdout)
+                # 单网卡时 ConvertTo-Json 返回对象而非数组，统一成列表
+                if isinstance(data, dict):
+                    data = [data]
+                for nic in data:
+                    ips = nic["ip"] if isinstance(nic["ip"], list) else [nic["ip"]]
+                    ips = [i for i in ips if i]  # 过滤 None
+                    say(f"网卡: {nic['name']:<12} MAC: {nic['mac']}  "
+                        f"IPv4: {', '.join(ips) if ips else '(无)'}")
+                got_detail = True
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError):
+            pass
+
+    if not got_detail:
+        # 兜底（非 Windows 或 PowerShell 失败）：socket 拿 IP 列表，uuid 拿一个 MAC
+        try:
+            ips = socket.gethostbyname_ex(socket.gethostname())[2]
+            say(f"IPv4: {', '.join(ips)}")
+        except socket.gaierror:
+            say("IPv4: 获取失败")
+        # uuid.getnode() 返回 48 位整数 MAC；格式化为常见的冒号分隔十六进制
+        mac = uuid.getnode()
+        say("MAC(其一): " + ":".join(f"{(mac >> s) & 0xff:02x}"
+                                     for s in range(40, -1, -8)))
+
+    # Tailscale IP：装了 tailscale 的机器可用它做跨网段直连（SSH 首选地址）
+    try:
+        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True,
+                             text=True, timeout=15)
+        if out.returncode == 0 and out.stdout.strip():
+            say(f"Tailscale IP: {out.stdout.strip()}  ← 跨网段 SSH 首选地址")
+        else:
+            say("Tailscale: 已安装但未登录/未运行")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        say("Tailscale: 未安装")
 
 
 def check_disks():
