@@ -42,12 +42,15 @@ from src.split import split_files
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 log = get_logger("compare4")
 
-# 四组方法定义：名称 -> (中文标签, 破坏函数)；破坏函数签名 f(x, generator)
+# 方法定义：名称 -> (中文标签, 破坏函数)；破坏函数签名 f(x, generator)
 METHODS = {
     "cae": ("① CAE压缩重建", lambda x, g: x),  # 不破坏
     "inpaint": ("② 遮挡修复", lambda x, g: erase_rects(x, generator=g)),
-    "mae": ("③ MAE(ViT)", lambda x, g: mask_patches(x, generator=g)),
+    "mae": ("③ MAE(ViT从零)", lambda x, g: mask_patches(x, generator=g)),
     "color": ("④ 去色重彩", lambda x, g: to_grayscale(x)),
+    # ③′：与 ③ 同样的破坏方式，但编码器换成 ImageNet 预训练 ViT-Tiny，
+    # 用于对照"从零 vs 预训练"（运行前需设 HF_HOME 指向权重缓存盘）
+    "mae_pre": ("③′ MAE(ViT预训练)", lambda x, g: mask_patches(x, generator=g)),
 }
 # 验证/测试破坏图案的固定种子（与训练随机破坏区分开）
 EVAL_CORRUPT_SEED = 12345
@@ -72,10 +75,31 @@ def parse_args():
 
 
 def build_model(method: str, latent_dim: int) -> torch.nn.Module:
-    """按方法名构造模型：mae 用 ViT-Tiny，其余用 CAE-224（控制变量）"""
+    """按方法名构造模型：mae 系用 ViT-Tiny（从零/预训练），其余用 CAE-224"""
     if method == "mae":
         return MAE()
+    if method == "mae_pre":
+        return MAE(pretrained=True)
     return CAE(latent_dim=latent_dim, input_size=224)
+
+
+def make_optimizer(model: torch.nn.Module, method: str, lr: float):
+    """按方法构造优化器：预训练微调用分组学习率，其余统一学习率
+
+    mae_pre 的分组依据：预训练主干（backbone.*）已经会"看图"，用 1/10
+    学习率轻微调，避免大学习率把 ImageNet 学来的通用视觉特征冲掉
+    （灾难性遗忘）；随机初始化的解码头则用全速学习率从头学。
+    """
+    if method == "mae_pre":
+        # named_parameters 按名字前缀分成两组：backbone.* 和其余（解码头等）
+        backbone, rest = [], []
+        for name, p in model.named_parameters():
+            (backbone if name.startswith("backbone.") else rest).append(p)
+        return torch.optim.Adam([
+            {"params": backbone, "lr": lr * 0.1},
+            {"params": rest, "lr": lr},
+        ])
+    return torch.optim.Adam(model.parameters(), lr=lr)
 
 
 def run_epoch(model, loader, corrupt_fn, device, optimizer=None,
@@ -168,7 +192,7 @@ def run_compare(args) -> dict:
         label, corrupt_fn = METHODS[method]
         torch.manual_seed(args.seed)  # 每组同种子初始化，控制变量
         model = build_model(method, args.latent_dim).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = make_optimizer(model, method, args.lr)
         log.info("[%s] 开始训练 | 参数量 %s", label, f"{model.count_parameters():,}")
 
         h = {"label": label, "train": [], "val": [], "test": []}
@@ -191,7 +215,16 @@ def run_compare(args) -> dict:
                    os.path.join(args.ckpt_dir, f"{method}.pth"))
 
     # ---------- 产出：先写 JSON（数据落盘），再子进程出图 ----------
+    # 与已有结果合并：单独重跑某一组（如 --methods mae_pre）时，把新曲线
+    # 并进之前的 compare4.json，出图时新旧方法同框对比；同名方法覆盖旧值
     json_path = os.path.join(args.out_dir, "compare4.json")
+    if os.path.isfile(json_path):
+        with open(json_path, encoding="utf-8") as f:
+            old = json.load(f).get("history", {})
+        if old:
+            log.info("检测到已有结果（%s），合并后同图对比", ",".join(old))
+        # 字典解包合并：old 在前 history 在后，本次结果覆盖同名旧结果
+        history = {**old, **history}
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump({
             "protocol": "仅用224降采样图; 7:1:2划分; 每组20epoch; 统一MSE重建原图",

@@ -53,6 +53,39 @@ def test_parameter_count():
     assert 2_000_000 < n < 10_000_000, f"参数量 {n:,} 偏离 ViT-Tiny 量级"
 
 
+def test_pretrained_mode():
+    """预训练模式（阶段11f）：加载 timm 权重，前向 shape 正确、梯度可达
+
+    需要 timm 已安装且权重已缓存（HF_HOME 指向 D:\\hf_cache）；
+    环境不满足时跳过而非失败（203 等新机器上可能尚未下载权重）。
+    """
+    import pytest
+    try:
+        import timm  # noqa: F401  只测可导入性
+    except ImportError:
+        pytest.skip("timm 未安装")
+    if os.path.isdir(r"D:\hf_cache"):
+        os.environ.setdefault("HF_HOME", r"D:\hf_cache")
+
+    try:
+        model = MAE(pretrained=True)
+    except Exception as e:  # 权重不可得（无网络/无缓存）时跳过
+        pytest.skip(f"预训练权重不可得: {e}")
+
+    x = torch.rand(2, 3, 224, 224)
+    x_hat, z = model(x)
+    assert x_hat.shape == (2, 3, 224, 224)
+    assert z.shape == (2, EMBED_DIM)
+    assert x_hat.min() >= 0.0 and x_hat.max() <= 1.0
+    # 参数应分布在 backbone.* 前缀下（微调分组学习率的依据）
+    names = [n for n, _ in model.named_parameters()]
+    assert any(n.startswith("backbone.") for n in names), "缺少 backbone 前缀参数"
+    # 梯度可达（含预训练主干——微调模式主干也要更新）
+    ((x_hat - x) ** 2).mean().backward()
+    n_with_grad = sum(1 for _, p in model.named_parameters() if p.grad is not None)
+    assert n_with_grad == len(names), "存在未接入计算图的参数"
+
+
 def test_unpatchify_geometry():
     """拼图几何正确性：直接检验 forward 中的 permute/reshape 逻辑
 
