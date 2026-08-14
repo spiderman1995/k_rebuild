@@ -51,6 +51,10 @@ METHODS = {
     # ③′：与 ③ 同样的破坏方式，但编码器换成 ImageNet 预训练 ViT-Tiny，
     # 用于对照"从零 vs 预训练"（运行前需设 HF_HOME 指向权重缓存盘）
     "mae_pre": ("③′ MAE(ViT预训练)", lambda x, g: mask_patches(x, generator=g)),
+    # ③″：统一解码器版（阶段11h）——预训练 ViT 编码器 + 投影瓶颈 +
+    # CAE 同款解码器，与 cae/inpaint/color 三组解码器初始权重逐位一致
+    "mae_uni": ("③″ MAE(ViT预训练·统一解码器)",
+                lambda x, g: mask_patches(x, generator=g)),
 }
 # 验证/测试破坏图案的固定种子（与训练随机破坏区分开）
 EVAL_CORRUPT_SEED = 12345
@@ -74,23 +78,31 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_model(method: str, latent_dim: int) -> torch.nn.Module:
-    """按方法名构造模型：mae 系用 ViT-Tiny（从零/预训练），其余用 CAE-224"""
+def build_model(method: str, latent_dim: int, seed: int) -> torch.nn.Module:
+    """按方法名构造模型
+
+    seed 用作**解码器初始化种子**：cae/inpaint/color/mae_uni 四组的解码器
+    由此保证初始权重逐位一致（严格控制变量，见 build_decoder）。
+    mae/mae_pre 是早期方案（线性 token 解码头），保留供历史对照。
+    """
     if method == "mae":
         return MAE()
     if method == "mae_pre":
         return MAE(pretrained=True)
-    return CAE(latent_dim=latent_dim, input_size=224)
+    if method == "mae_uni":
+        from src.model_mae import MAEUnified
+        return MAEUnified(latent_dim=latent_dim, decoder_init_seed=seed)
+    return CAE(latent_dim=latent_dim, input_size=224, decoder_init_seed=seed)
 
 
 def make_optimizer(model: torch.nn.Module, method: str, lr: float):
     """按方法构造优化器：预训练微调用分组学习率，其余统一学习率
 
-    mae_pre 的分组依据：预训练主干（backbone.*）已经会"看图"，用 1/10
-    学习率轻微调，避免大学习率把 ImageNet 学来的通用视觉特征冲掉
-    （灾难性遗忘）；随机初始化的解码头则用全速学习率从头学。
+    mae_pre/mae_uni 的分组依据：预训练主干（backbone.*）已经会"看图"，
+    用 1/10 学习率轻微调，避免大学习率把 ImageNet 学来的通用视觉特征
+    冲掉（灾难性遗忘）；随机初始化的投影层/解码器则用全速学习率从头学。
     """
-    if method == "mae_pre":
+    if method in ("mae_pre", "mae_uni"):
         # named_parameters 按名字前缀分成两组：backbone.* 和其余（解码头等）
         backbone, rest = [], []
         for name, p in model.named_parameters():
@@ -191,7 +203,7 @@ def run_compare(args) -> dict:
     for method in methods:
         label, corrupt_fn = METHODS[method]
         torch.manual_seed(args.seed)  # 每组同种子初始化，控制变量
-        model = build_model(method, args.latent_dim).to(device)
+        model = build_model(method, args.latent_dim, args.seed).to(device)
         optimizer = make_optimizer(model, method, args.lr)
         log.info("[%s] 开始训练 | 参数量 %s", label, f"{model.count_parameters():,}")
 

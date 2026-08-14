@@ -137,3 +137,83 @@ class MAE(nn.Module):
     def count_parameters(self) -> int:
         """统计可训练参数总量"""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+class MAEUnified(nn.Module):
+    """统一解码器版：预训练 ViT-Tiny 编码器 + 投影瓶颈 + CAE 同款解码器
+
+    为"四组解码器完全一致"的对照实验（开发计划 阶段 11h）而设：
+        编码器: timm 预训练 ViT-Tiny → 196 个 patch token 均值池化 (B,192)
+                → 线性投影到 latent_dim 维特征 z（显式全局瓶颈，
+                与 CAE 组的信息通道等价——这是与 MAE 类的关键差别）
+        解码器: 与 CAE-224 **同结构**（build_decoder 构造），配合
+                decoder_init_seed 可与 CNN 组做到**初始权重逐位一致**
+
+    参数:
+        latent_dim:        特征 z 维度（与 CNN 组保持一致，默认 256）
+        decoder_init_seed: 解码器初始化种子（四组传同一值即严格控制变量）
+    """
+
+    def __init__(self, latent_dim: int = 256, decoder_init_seed: int = None):
+        super().__init__()
+        # 延迟 import：只有用到本类才要求装 timm
+        import timm
+
+        from src.model_cae import (BOTTLENECK_CHANNELS, BOTTLENECK_SIZE,
+                                   build_decoder)
+
+        self.latent_dim = latent_dim
+        self.backbone = timm.create_model(
+            "vit_tiny_patch16_224.augreg_in21k_ft_in1k",
+            pretrained=True, num_classes=0,
+        )
+        # ImageNet 归一化常数（同 MAE 类，见其注释）
+        self.register_buffer(
+            "in_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer(
+            "in_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+        # 投影瓶颈：token 池化向量 (B,192) -> 特征 z (B,latent_dim)
+        self.proj = nn.Linear(EMBED_DIM, latent_dim)
+        # CAE 同款解码器（224 版），种子固定时与 CNN 组初始权重逐位一致
+        self.decoder_fc, self.decoder_conv = build_decoder(
+            latent_dim, input_size=224, init_seed=decoder_init_seed
+        )
+        self._bottleneck_shape = (BOTTLENECK_CHANNELS, BOTTLENECK_SIZE,
+                                  BOTTLENECK_SIZE)
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """编码：图片 -> 特征向量 z
+
+        参数:
+            x: (被破坏的)图片, shape (B, 3, 224, 224), 取值 [0,1]
+        返回:
+            z: 特征向量, shape (B, latent_dim)
+        """
+        x = (x - self.in_mean) / self.in_std
+        # forward_features 输出 (B,197,192)，去掉第 0 个 CLS token 后均值池化
+        pooled = self.backbone.forward_features(x)[:, 1:].mean(dim=1)
+        return self.proj(pooled)
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        """解码：特征向量 -> 重建图片（与 CAE.decode 完全同构）
+
+        参数:
+            z: 特征向量, shape (B, latent_dim)
+        返回:
+            x_hat: 重建图片, shape (B, 3, 224, 224)
+        """
+        feat = self.decoder_fc(z).view(-1, *self._bottleneck_shape)
+        return self.decoder_conv(feat)
+
+    def forward(self, x: torch.Tensor) -> tuple:
+        """前向：破坏图 -> z -> 重建整图
+
+        返回:
+            (x_hat, z): 重建图 (B,3,224,224) 与特征 (B,latent_dim)
+        """
+        z = self.encode(x)
+        return self.decode(z), z
+
+    def count_parameters(self) -> int:
+        """统计可训练参数总量"""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)

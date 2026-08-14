@@ -60,6 +60,47 @@ def _deconv_block(in_ch: int, out_ch: int) -> nn.Sequential:
     )
 
 
+def build_decoder(latent_dim: int, input_size: int = 448,
+                  init_seed: int = None):
+    """构造 CAE 同款解码器，返回 (decoder_fc, decoder_conv) 两个模块
+
+    供 CAE 自身与"统一解码器"对照实验（不同编码器共享同一解码器）使用。
+
+    参数:
+        latent_dim: 特征向量维度（decoder_fc 的输入维）
+        input_size: 目标图片边长（448/224），决定上采样块数
+        init_seed:  不为 None 时，先临时固定随机种子再建层、随后恢复
+                    原随机状态——多次调用（乃至不同模型里调用）得到的
+                    解码器初始权重**逐位一致**，实现严格的控制变量
+    返回:
+        (decoder_fc, decoder_conv):
+            decoder_fc:   Linear(latent_dim -> 512*7*7)
+            decoder_conv: 上采样堆栈, (B,512,7,7) -> (B,3,S,S) + Sigmoid
+    """
+    channels = ENCODER_CHANNELS[input_size]
+
+    def _make():
+        fc = nn.Linear(latent_dim, FLAT_DIM)
+        rev = channels[::-1]
+        blocks = [_deconv_block(i, o) for i, o in zip(rev, rev[1:])]
+        conv = nn.Sequential(
+            *blocks,
+            nn.Upsample(scale_factor=2, mode="nearest"),
+            nn.Conv2d(32, 3, kernel_size=3, stride=1, padding=1),
+            nn.Sigmoid(),
+        )
+        return fc, conv
+
+    if init_seed is None:
+        return _make()
+    # fork 随机状态：固定种子建层后恢复，不影响调用方后续的随机序列
+    rng_state = torch.get_rng_state()
+    torch.manual_seed(init_seed)
+    fc, conv = _make()
+    torch.set_rng_state(rng_state)
+    return fc, conv
+
+
 class CAE(nn.Module):
     """卷积自编码器
 
@@ -69,9 +110,13 @@ class CAE(nn.Module):
                     可从大到小尝试（512/256/128/64）找最小充分维度。
         input_size: 输入图片边长，支持 448（默认，原图）和 224（降采样图）。
                     两种尺寸都下采样到 512×7×7 瓶颈，仅卷积块数不同。
+        decoder_init_seed: 不为 None 时解码器用该种子独立初始化（见
+                    build_decoder），供"统一解码器"对照实验保证各组
+                    解码器初始权重一致；默认 None 沿用全局随机流
     """
 
-    def __init__(self, latent_dim: int = 256, input_size: int = 448):
+    def __init__(self, latent_dim: int = 256, input_size: int = 448,
+                 decoder_init_seed: int = None):
         super().__init__()
         if input_size not in ENCODER_CHANNELS:
             raise ValueError(
@@ -95,19 +140,10 @@ class CAE(nn.Module):
         self.encoder_fc = nn.Linear(FLAT_DIM, latent_dim)
 
         # ---------- 解码器 ----------
-        # 先用全连接把 z 恢复成能 reshape 为 (512,7,7) 的向量
-        self.decoder_fc = nn.Linear(latent_dim, FLAT_DIM)
-        # 上采样块与编码器对称：通道序列反向（如 448: 512→512→256→128→64→32）
-        # channels[::-1] 是列表反转切片；zip(rev, rev[1:]) 把相邻两项配成
-        # (in,out) 对，自然得到 len-1 个块（448:5 块 7→224；224:4 块 7→112）
-        rev = channels[::-1]
-        dec_blocks = [_deconv_block(i, o) for i, o in zip(rev, rev[1:])]
-        self.decoder_conv = nn.Sequential(
-            *dec_blocks,                                  # 7 -> input_size/2
-            nn.Upsample(scale_factor=2, mode="nearest"),  # -> input_size
-            # 输出层：3 通道 + Sigmoid 把像素约束到 [0,1]，与输入取值范围一致
-            nn.Conv2d(32, 3, kernel_size=3, stride=1, padding=1),
-            nn.Sigmoid(),
+        # 结构见 build_decoder：Linear 恢复 512×7×7 + 对称上采样堆栈；
+        # 抽成共享构造函数是为了让其他编码器（如 ViT）能用同一个解码器
+        self.decoder_fc, self.decoder_conv = build_decoder(
+            latent_dim, input_size, decoder_init_seed
         )
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:

@@ -86,6 +86,55 @@ def test_pretrained_mode():
     assert n_with_grad == len(names), "存在未接入计算图的参数"
 
 
+def test_unified_decoder_identical_across_models():
+    """统一解码器（阶段11h 核心性质）：同种子下 CAE 与 MAEUnified 的
+    解码器初始权重逐位一致；前向/梯度正常
+
+    需要 timm 权重缓存，不可得时跳过（同 test_pretrained_mode）。
+    """
+    import pytest
+    try:
+        import timm  # noqa: F401
+    except ImportError:
+        pytest.skip("timm 未安装")
+    if os.path.isdir(r"D:\hf_cache"):
+        os.environ.setdefault("HF_HOME", r"D:\hf_cache")
+
+    from src.model_cae import CAE
+    from src.model_mae import MAEUnified
+
+    try:
+        uni = MAEUnified(latent_dim=256, decoder_init_seed=42)
+    except Exception as e:
+        pytest.skip(f"预训练权重不可得: {e}")
+    cae = CAE(latent_dim=256, input_size=224, decoder_init_seed=42)
+
+    # 核心断言：两个模型的解码器（fc + conv 全部张量）初始权重逐位相等
+    uni_sd = {**dict(uni.decoder_fc.state_dict()),
+              **{f"conv.{k}": v for k, v in uni.decoder_conv.state_dict().items()}}
+    cae_sd = {**dict(cae.decoder_fc.state_dict()),
+              **{f"conv.{k}": v for k, v in cae.decoder_conv.state_dict().items()}}
+    assert uni_sd.keys() == cae_sd.keys(), "解码器结构不一致"
+    for k in uni_sd:
+        assert torch.equal(uni_sd[k], cae_sd[k]), f"解码器权重 {k} 不一致"
+
+    # 前向 shape 与梯度
+    x = torch.rand(2, 3, 224, 224)
+    x_hat, z = uni(x)
+    assert x_hat.shape == (2, 3, 224, 224)
+    assert z.shape == (2, 256)
+    ((x_hat - x) ** 2).mean().backward()
+    for name, p in uni.named_parameters():
+        assert p.grad is not None, f"参数 {name} 无梯度"
+
+    # 种子 fork 不应污染全局随机流：连续两次同种子构造应完全一致
+    d1 = CAE(latent_dim=256, input_size=224, decoder_init_seed=7)
+    d2 = CAE(latent_dim=256, input_size=224, decoder_init_seed=7)
+    for (k1, v1), (_k2, v2) in zip(d1.decoder_fc.state_dict().items(),
+                                   d2.decoder_fc.state_dict().items()):
+        assert torch.equal(v1, v2), f"同种子两次构造解码器不一致: {k1}"
+
+
 def test_unpatchify_geometry():
     """拼图几何正确性：直接检验 forward 中的 permute/reshape 逻辑
 
