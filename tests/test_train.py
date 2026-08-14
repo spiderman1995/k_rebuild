@@ -17,6 +17,7 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.compat import load_checkpoint
 from src.model_cae import CAE
 from src.train import train
 
@@ -81,8 +82,8 @@ def _assert_gates(result: dict):
     # 关卡 2：checkpoint 存在且可恢复出能前向的模型
     ckpt_path = result["ckpt_path"]
     assert os.path.isfile(ckpt_path), "checkpoint 文件未生成"
-    # weights_only=False：checkpoint 里除权重外还存了超参数配置字典
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    # load_checkpoint 兼容 torch 1.10~2.x（见 src/compat.py）
+    ckpt = load_checkpoint(ckpt_path, map_location="cpu")
     model = CAE(latent_dim=ckpt["latent_dim"])
     model.load_state_dict(ckpt["model_state"])
     model.eval()

@@ -27,6 +27,7 @@ from pytorch_msssim import ssim as ssim_func
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.compat import load_checkpoint
 from src.dataset import KLineDataset
 from src.logger import get_logger, setup_logger
 from src.machine import get_machine_tag
@@ -64,8 +65,8 @@ def load_model(ckpt_path: str, device: torch.device) -> CAE:
     返回:
         eval 模式的 CAE 模型
     """
-    # weights_only=False：checkpoint 里除权重外还存了超参数配置
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    # load_checkpoint 兼容 torch 1.10~2.x（203 机器钉在 1.10，见 compat.py）
+    ckpt = load_checkpoint(ckpt_path, map_location=device)
     model = CAE(latent_dim=ckpt["latent_dim"]).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()  # 固定 BatchNorm 统计量（评估必须，否则指标失真）

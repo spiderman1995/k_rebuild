@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 # 保证以 `python src/train.py` 方式直接运行时能找到 src 包
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.compat import load_checkpoint
 from src.dataset import KLineDataset
 from src.logger import get_logger, setup_logger
 from src.losses import CombinedLoss
@@ -90,7 +91,7 @@ def _maybe_resume(resume, latent_dim, ckpt_path, model, optimizer,
     if not (resume and os.path.isfile(ckpt_path)):
         return float("inf"), 1
 
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    ckpt = load_checkpoint(ckpt_path, map_location=device)
     if ckpt["latent_dim"] != latent_dim:
         raise ValueError(
             f"checkpoint latent_dim={ckpt['latent_dim']} "
