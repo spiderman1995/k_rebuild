@@ -232,7 +232,10 @@ def run_compare(args) -> dict:
             "split": {"train": len(train_f), "val": len(val_f), "test": len(test_f)},
             "history": history,
         }, f, ensure_ascii=False, indent=2)
-    plot_path = os.path.join(args.out_dir, "loss_curves.png")
+    # 文件名带最大轮数（如 loss_curves_by_split_50ep.png）：
+    # 每次延长训练产生新文件，不覆盖旧图，便于前后对照
+    max_ep = max(len(h["train"]) for h in history.values())
+    plot_path = os.path.join(args.out_dir, f"loss_curves_by_split_{max_ep}ep.png")
     plot_in_subprocess(json_path, plot_path)
     log.info("实验完成 | 曲线图: %s | 数据: %s", plot_path, json_path)
     return {"history": history, "json_path": json_path, "plot_path": plot_path}

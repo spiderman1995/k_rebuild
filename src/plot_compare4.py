@@ -24,45 +24,35 @@ matplotlib.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei"]
 matplotlib.rcParams["axes.unicode_minus"] = False  # 负号正常显示
 
 
-def plot_curves(history: dict, epochs: int, out_path: str):
-    """绘制损失曲线：上排每组三条(训练/验证/测试)，下排各组验证集对比
+# 三个数据集切分对应的中文标题
+SPLIT_TITLES = {"train": "训练集", "val": "验证集", "test": "测试集"}
 
-    各组曲线长度可以不同（合并了不同 epoch 数的运行结果），
-    横轴按每组自己的历史长度画，短曲线自然止于自己的最后一轮。
+
+def plot_curves(history: dict, epochs: int, out_path: str):
+    """绘制损失曲线：训练/验证/测试各一张子图，每张子图放所有方法的曲线
+
+    布局按用户要求（2026-08-13）：同一切分下所有方法同框，方法间直接对比。
+    各方法曲线长度可以不同（合并了不同 epoch 数的运行结果），
+    横轴按各自历史长度画，短曲线自然止于自己的最后一轮。
 
     参数:
         history:  {方法名: {'label':.., 'train': [...], 'val': [...], 'test': [...]}}
         epochs:   兼容保留参数（横轴实际按各组历史长度决定）
         out_path: 输出 PNG 路径
     """
-    n = max(len(history), 1)
-    # constrained_layout 自动排版；GridSpec(2, n) 上排 n 格、下排跨全列
-    fig = plt.figure(figsize=(4.2 * n, 7.5), constrained_layout=True)
-    gs = fig.add_gridspec(2, n)
-
-    for i, (_m, h) in enumerate(history.items()):
-        xs = range(1, len(h["train"]) + 1)  # 每组按自己的长度定横轴
-        ax = fig.add_subplot(gs[0, i])
-        ax.plot(xs, h["train"], label="训练", color="#1f77b4")
-        ax.plot(xs, h["val"], label="验证", color="#ff7f0e")
-        ax.plot(xs, h["test"], label="测试", color="#2ca02c")
-        ax.set_title(f"{h['label']} ({len(h['train'])}ep)")
+    # 三张子图横排：训练 | 验证 | 测试
+    fig, axes = plt.subplots(1, 3, figsize=(19, 5.5), constrained_layout=True)
+    for ax, split in zip(axes, ("train", "val", "test")):
+        for _m, h in history.items():
+            # 曲线标注方法名与其轮数（不同方法轮数可不同）
+            ax.plot(range(1, len(h[split]) + 1), h[split],
+                    label=f"{h['label']} ({len(h[split])}ep)")
+        ax.set_title(f"{SPLIT_TITLES[split]}损失对比（纯 MSE，重建原图，方法间可直接比较）")
         ax.set_xlabel("epoch")
         ax.set_ylabel("MSE 损失")
         ax.set_yscale("log")  # 损失跨数量级下降，对数轴更易读
         ax.grid(alpha=0.3)
-        ax.legend()
-
-    # 下排：各组验证集损失同图横向对比（曲线长度可不同）
-    ax_all = fig.add_subplot(gs[1, :])
-    for _m, h in history.items():
-        ax_all.plot(range(1, len(h["val"]) + 1), h["val"], label=h["label"])
-    ax_all.set_title("各方案验证集损失对比（统一目标：重建原图，纯 MSE，可直接比较）")
-    ax_all.set_xlabel("epoch")
-    ax_all.set_ylabel("验证 MSE 损失")
-    ax_all.set_yscale("log")
-    ax_all.grid(alpha=0.3)
-    ax_all.legend()
+        ax.legend(fontsize=9)
 
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
