@@ -28,13 +28,16 @@ from pytorch_msssim import ssim as ssim_func
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.dataset import KLineDataset
-from src.logger import get_logger, setup_logger
+from src.logger import get_logger, get_machine_tag, setup_logger
 from src.model_cae import CAE
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 模块级子 logger：日志带 'kline.eval' 前缀
 log = get_logger("eval")
+
+# 输出按机器分文件夹（防多机 git 冲突，见 get_machine_tag）
+MACHINE = get_machine_tag()
 
 
 def parse_args():
@@ -44,8 +47,9 @@ def parse_args():
                         help="checkpoint 路径")
     parser.add_argument("--img-dir", default=os.path.join(ROOT, "分钟k线图"),
                         help="评估图片文件夹")
-    parser.add_argument("--out-dir", default=os.path.join(ROOT, "results"),
-                        help="对比图与指标输出目录")
+    parser.add_argument("--out-dir",
+                        default=os.path.join(ROOT, "results", MACHINE),
+                        help="对比图与指标输出目录（默认按机器分文件夹）")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
 

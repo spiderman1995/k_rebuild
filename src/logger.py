@@ -67,6 +67,17 @@ def setup_logger(log_dir: str = None, level: int = logging.INFO) -> logging.Logg
     return logger
 
 
+def get_machine_tag() -> str:
+    """返回本机的结果目录标识（多机协作时隔离各机器的实验产出）
+
+    优先取环境变量 KLINE_MACHINE（如在 203 上 set KLINE_MACHINE=203，
+    得到简短可读的目录名）；未设置则退回主机名——两台机器主机名不同，
+    结果自然写入不同目录，git 同步时不会互相冲突。
+    """
+    import platform
+    return os.environ.get("KLINE_MACHINE") or platform.node().lower()
+
+
 def get_logger(module_name: str) -> logging.Logger:
     """获取模块子 logger（日志会带上 'kline.模块名' 前缀）
 

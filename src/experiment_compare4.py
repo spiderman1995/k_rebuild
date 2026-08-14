@@ -34,13 +34,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.corruptions import erase_rects, mask_patches, to_grayscale
 from src.dataset import KLineDataset
-from src.logger import get_logger, setup_logger
+from src.logger import get_logger, get_machine_tag, setup_logger
 from src.model_cae import CAE
 from src.model_mae import MAE
 from src.split import split_files
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 log = get_logger("compare4")
+
+# 结果按机器分文件夹隔离（results/<机器标识>/...），多机跑同名实验
+# 也不会产生 git 冲突；标识来源见 get_machine_tag
+MACHINE = get_machine_tag()
 
 # 方法定义：名称 -> (中文标签, 破坏函数)；破坏函数签名 f(x, generator)
 METHODS = {
@@ -70,8 +74,11 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=1e-3, help="Adam 学习率")
     parser.add_argument("--latent-dim", type=int, default=256, help="CAE 特征维度")
     parser.add_argument("--seed", type=int, default=42, help="划分与初始化种子")
-    parser.add_argument("--out-dir", default=os.path.join(ROOT, "results", "compare4"))
-    parser.add_argument("--ckpt-dir", default=os.path.join(ROOT, "checkpoints", "compare4"))
+    # 默认输出按机器分文件夹（results/<机器标识>/compare4），防多机 git 冲突
+    parser.add_argument("--out-dir",
+                        default=os.path.join(ROOT, "results", MACHINE, "compare4"))
+    parser.add_argument("--ckpt-dir",
+                        default=os.path.join(ROOT, "checkpoints", MACHINE, "compare4"))
     parser.add_argument("--methods", default="cae,inpaint,mae,color",
                         help="逗号分隔的方法子集（调试用）")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")

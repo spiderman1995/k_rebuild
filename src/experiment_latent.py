@@ -30,11 +30,14 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.evaluate import evaluate
-from src.logger import get_logger, setup_logger
+from src.logger import get_logger, get_machine_tag, setup_logger
 from src.train import train
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 log = get_logger("experiment")
+
+# 结果按机器分文件夹隔离，防多机 git 冲突（见 get_machine_tag）
+MACHINE = get_machine_tag()
 
 # 达标线（校准依据见 开发计划.md 阶段4实验记录）
 PSNR_FLOOR = 30.0   # PSNR 绝对下限 (dB)
@@ -50,9 +53,11 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=600, help="每个维度的训练轮数")
     parser.add_argument("--img-dir", default=os.path.join(ROOT, "分钟k线图"),
                         help="数据文件夹（远程复核时指向验证集目录）")
-    parser.add_argument("--out-dir", default=os.path.join(ROOT, "results"),
-                        help="实验结果 JSON 输出目录")
-    parser.add_argument("--work-dir", default=os.path.join(ROOT, "checkpoints", "latent_exp"),
+    parser.add_argument("--out-dir",
+                        default=os.path.join(ROOT, "results", MACHINE),
+                        help="实验结果 JSON 输出目录（默认按机器分文件夹）")
+    parser.add_argument("--work-dir",
+                        default=os.path.join(ROOT, "checkpoints", MACHINE, "latent_exp"),
                         help="各维度 checkpoint 的存放目录")
     parser.add_argument("--seed", type=int, default=42, help="随机种子（控制变量）")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
