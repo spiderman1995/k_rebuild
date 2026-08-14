@@ -43,6 +43,9 @@ class MAE(nn.Module):
                  n_heads: int = N_HEADS, pretrained: bool = False):
         super().__init__()
         self.embed_dim = embed_dim
+        # 契约对齐（里氏替换）：CAE/MAEUnified 都用 latent_dim 表示特征 z
+        # 的维度，MAE 的 z 维度就是 embed_dim，加别名使三类模型可统一读取
+        self.latent_dim = embed_dim
         self.pretrained = pretrained
 
         if pretrained:

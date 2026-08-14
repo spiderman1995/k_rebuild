@@ -34,7 +34,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.corruptions import erase_rects, mask_patches, to_grayscale
 from src.dataset import KLineDataset
-from src.logger import get_logger, get_machine_tag, setup_logger
+from src.logger import get_logger, setup_logger
+from src.machine import get_machine_tag
 from src.model_cae import CAE
 from src.model_mae import MAE
 from src.split import split_files
@@ -102,18 +103,25 @@ def build_model(method: str, latent_dim: int, seed: int) -> torch.nn.Module:
     return CAE(latent_dim=latent_dim, input_size=224, decoder_init_seed=seed)
 
 
-def make_optimizer(model: torch.nn.Module, method: str, lr: float):
-    """按方法构造优化器：预训练微调用分组学习率，其余统一学习率
+def make_optimizer(model: torch.nn.Module, lr: float):
+    """按模型结构构造优化器：含预训练主干（backbone.*）时用分组学习率
 
-    mae_pre/mae_uni 的分组依据：预训练主干（backbone.*）已经会"看图"，
-    用 1/10 学习率轻微调，避免大学习率把 ImageNet 学来的通用视觉特征
-    冲掉（灾难性遗忘）；随机初始化的投影层/解码器则用全速学习率从头学。
+    分组依据：预训练主干已经会"看图"，用 1/10 学习率轻微调，避免大学习率
+    把 ImageNet 学来的通用视觉特征冲掉（灾难性遗忘）；随机初始化的
+    投影层/解码器则用全速学习率从头学。
+
+    判断依据是**参数名前缀**而非方法名清单（开闭原则）：新增带预训练
+    主干的方法时无需修改本函数，也杜绝"方法名清单漏改导致主干被全速
+    学习率训练、实验结果静默失真"的风险。
     """
-    if method in ("mae_pre", "mae_uni"):
-        # named_parameters 按名字前缀分成两组：backbone.* 和其余（解码头等）
-        backbone, rest = [], []
-        for name, p in model.named_parameters():
-            (backbone if name.startswith("backbone.") else rest).append(p)
+    backbone, rest = [], []
+    for name, p in model.named_parameters():
+        if name.startswith("backbone."):
+            backbone.append(p)
+        else:
+            rest.append(p)
+
+    if backbone:
         return torch.optim.Adam([
             {"params": backbone, "lr": lr * 0.1},
             {"params": rest, "lr": lr},
@@ -136,7 +144,10 @@ def run_epoch(model, loader, corrupt_fn, device, optimizer=None,
         整个数据集的逐样本平均损失
     """
     training = optimizer is not None
-    model.train() if training else model.eval()
+    if training:
+        model.train()
+    else:
+        model.eval()
     # 评估用固定种子 generator：每个 epoch 的破坏图案完全一致，曲线平滑可比
     gen = None
     if eval_seed is not None:
@@ -181,62 +192,75 @@ def plot_in_subprocess(json_path: str, plot_path: str):
         raise RuntimeError(f"绘图子进程失败:\n{result.stderr}")
 
 
-def run_compare(args) -> dict:
-    """执行完整四组对照实验
+def build_loaders(args) -> tuple:
+    """按 7:1:2 划分数据并构建三个 DataLoader（各方法共用同一划分）
 
     返回:
-        dict: {'history': 各方法损失历史, 'json_path': .., 'plot_path': ..}
+        (train_loader, val_loader, test_loader, split_sizes)
+        split_sizes 为 {'train': n, 'val': n, 'test': n}，供结果 JSON 记录
     """
-    setup_logger()
-    os.makedirs(args.out_dir, exist_ok=True)
-    os.makedirs(args.ckpt_dir, exist_ok=True)
-    device = torch.device(args.device)
-
-    # ---------- 数据：7:1:2 划分，四组共用 ----------
     files = sorted(f for f in os.listdir(args.img_dir) if f.endswith(".png"))
-    train_f, val_f, test_f = split_files(files, ratios=(0.7, 0.1, 0.2), seed=args.seed)
-    make_loader = lambda fs, shuffle: DataLoader(  # noqa: E731 简短工厂，仅本函数用
-        KLineDataset(args.img_dir, files=fs, size=224),
-        batch_size=args.batch_size, shuffle=shuffle)
-    train_loader = make_loader(train_f, True)
-    val_loader = make_loader(val_f, False)
-    test_loader = make_loader(test_f, False)
-    log.info("对照实验启动 | 数据 %s | 划分 %d/%d/%d | epochs=%d | 设备 %s",
-             args.img_dir, len(train_f), len(val_f), len(test_f),
-             args.epochs, device)
+    train_f, val_f, test_f = split_files(files, ratios=(0.7, 0.1, 0.2),
+                                         seed=args.seed)
 
-    methods = [m.strip() for m in args.methods.split(",") if m.strip()]
-    history = {}
-    for method in methods:
-        label, corrupt_fn = METHODS[method]
-        torch.manual_seed(args.seed)  # 每组同种子初始化，控制变量
-        model = build_model(method, args.latent_dim, args.seed).to(device)
-        optimizer = make_optimizer(model, method, args.lr)
-        log.info("[%s] 开始训练 | 参数量 %s", label, f"{model.count_parameters():,}")
+    def make_loader(fs, shuffle):
+        return DataLoader(KLineDataset(args.img_dir, files=fs, size=224),
+                          batch_size=args.batch_size, shuffle=shuffle)
 
-        h = {"label": label, "train": [], "val": [], "test": []}
-        t0 = time.time()
-        for ep in range(1, args.epochs + 1):
-            tr = run_epoch(model, train_loader, corrupt_fn, device, optimizer)
-            va = run_epoch(model, val_loader, corrupt_fn, device,
-                           eval_seed=EVAL_CORRUPT_SEED)
-            te = run_epoch(model, test_loader, corrupt_fn, device,
-                           eval_seed=EVAL_CORRUPT_SEED + 1)
-            h["train"].append(tr)
-            h["val"].append(va)
-            h["test"].append(te)
-            log.info("[%s] epoch %2d/%d | 训练 %.5f | 验证 %.5f | 测试 %.5f | %ds",
-                     label, ep, args.epochs, tr, va, te, time.time() - t0)
-        history[method] = h
-        # 每组各存一个 checkpoint，便于后续复用编码器提特征
-        torch.save({"model_state": model.state_dict(), "method": method,
-                    "latent_dim": args.latent_dim, "epochs": args.epochs},
-                   os.path.join(args.ckpt_dir, f"{method}.pth"))
+    sizes = {"train": len(train_f), "val": len(val_f), "test": len(test_f)}
+    return make_loader(train_f, True), make_loader(val_f, False), \
+        make_loader(test_f, False), sizes
 
-    # ---------- 产出：先写 JSON（数据落盘），再子进程出图 ----------
-    # 与已有结果合并：单独重跑某一组（如 --methods mae_pre）时，把新曲线
-    # 并进之前的 compare4.json，出图时新旧方法同框对比；同名方法覆盖旧值
-    json_path = os.path.join(args.out_dir, "compare4.json")
+
+def train_one_method(method: str, loaders: tuple, args, device) -> dict:
+    """训练单个方法全部 epoch 并保存 checkpoint，返回其损失历史
+
+    参数:
+        method:  METHODS 中的方法名
+        loaders: (train_loader, val_loader, test_loader)
+        args:    命令行参数（本模块内部约定，与 parse_args 同源）
+        device:  计算设备
+    返回:
+        {'label':.., 'train': [...], 'val': [...], 'test': [...]}
+    """
+    train_loader, val_loader, test_loader = loaders
+    label, corrupt_fn = METHODS[method]
+    torch.manual_seed(args.seed)  # 每组同种子初始化，控制变量
+    model = build_model(method, args.latent_dim, args.seed).to(device)
+    optimizer = make_optimizer(model, args.lr)
+    log.info("[%s] 开始训练 | 参数量 %s", label, f"{model.count_parameters():,}")
+
+    h = {"label": label, "train": [], "val": [], "test": []}
+    t0 = time.time()
+    for ep in range(1, args.epochs + 1):
+        tr = run_epoch(model, train_loader, corrupt_fn, device, optimizer)
+        va = run_epoch(model, val_loader, corrupt_fn, device,
+                       eval_seed=EVAL_CORRUPT_SEED)
+        te = run_epoch(model, test_loader, corrupt_fn, device,
+                       eval_seed=EVAL_CORRUPT_SEED + 1)
+        h["train"].append(tr)
+        h["val"].append(va)
+        h["test"].append(te)
+        log.info("[%s] epoch %2d/%d | 训练 %.5f | 验证 %.5f | 测试 %.5f | %ds",
+                 label, ep, args.epochs, tr, va, te, time.time() - t0)
+
+    # 每组各存一个 checkpoint，便于后续复用编码器提特征。
+    # latent_dim 记录模型的**真实**特征维度（三类模型契约统一为该属性）：
+    # mae/mae_pre 的维度固定为 192，与命令行 --latent-dim 无关，
+    # 若记录 args.latent_dim 会误导后续加载方
+    torch.save({"model_state": model.state_dict(), "method": method,
+                "latent_dim": model.latent_dim, "epochs": args.epochs},
+               os.path.join(args.ckpt_dir, f"{method}.pth"))
+    return h
+
+
+def merge_and_save_history(json_path: str, history: dict, args,
+                           split_sizes: dict) -> dict:
+    """与既有结果 JSON 合并后写盘，返回合并后的完整 history
+
+    合并规则：单独重跑某一组（如 --methods mae_uni）时，新曲线并入旧
+    compare4.json，同名方法被本次结果覆盖，出图时新旧方法同框对比。
+    """
     if os.path.isfile(json_path):
         with open(json_path, encoding="utf-8") as f:
             old = json.load(f).get("history", {})
@@ -246,11 +270,39 @@ def run_compare(args) -> dict:
         history = {**old, **history}
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump({
-            "protocol": "仅用224降采样图; 7:1:2划分; 每组20epoch; 统一MSE重建原图",
+            "protocol": "仅用224降采样图; 7:1:2划分; 统一MSE重建原图",
             "epochs": args.epochs, "seed": args.seed,
-            "split": {"train": len(train_f), "val": len(val_f), "test": len(test_f)},
+            "split": split_sizes,
             "history": history,
         }, f, ensure_ascii=False, indent=2)
+    return history
+
+
+def run_compare(args) -> dict:
+    """执行完整对照实验（纯编排：数据 → 逐方法训练 → 落盘 → 出图）
+
+    返回:
+        dict: {'history': 各方法损失历史, 'json_path': .., 'plot_path': ..}
+    """
+    setup_logger()
+    os.makedirs(args.out_dir, exist_ok=True)
+    os.makedirs(args.ckpt_dir, exist_ok=True)
+    device = torch.device(args.device)
+
+    train_loader, val_loader, test_loader, sizes = build_loaders(args)
+    log.info("对照实验启动 | 数据 %s | 划分 %d/%d/%d | epochs=%d | 设备 %s",
+             args.img_dir, sizes["train"], sizes["val"], sizes["test"],
+             args.epochs, device)
+
+    methods = [m.strip() for m in args.methods.split(",") if m.strip()]
+    history = {}
+    for method in methods:
+        history[method] = train_one_method(
+            method, (train_loader, val_loader, test_loader), args, device)
+
+    json_path = os.path.join(args.out_dir, "compare4.json")
+    history = merge_and_save_history(json_path, history, args, sizes)
+
     # 文件名带最大轮数（如 loss_curves_by_split_50ep.png）：
     # 每次延长训练产生新文件，不覆盖旧图，便于前后对照
     max_ep = max(len(h["train"]) for h in history.values())

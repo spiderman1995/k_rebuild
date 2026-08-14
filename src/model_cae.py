@@ -81,6 +81,9 @@ def build_decoder(latent_dim: int, input_size: int = 448,
 
     def _make():
         fc = nn.Linear(latent_dim, FLAT_DIM)
+        # channels[::-1] 反转通道序列；zip(rev, rev[1:]) 把相邻两项配成
+        # (输入通道, 输出通道) 对，如 448 版: (512,512),(512,256)...(64,32)，
+        # 自然得到 len-1 个上采样块（448:5 块 7→224；224:4 块 7→112）
         rev = channels[::-1]
         blocks = [_deconv_block(i, o) for i, o in zip(rev, rev[1:])]
         conv = nn.Sequential(

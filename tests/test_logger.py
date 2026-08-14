@@ -94,7 +94,7 @@ def test_training_writes_log_fields():
             device="cuda" if torch.cuda.is_available() else "cpu",
             ckpt_dir=tmp_ckpt, log_every=1, resume=False,
         )
-        train(args)
+        train(**vars(args))
         content = open(_log_file_path(), encoding="utf-8").read()
         assert "训练启动" in content and "latent_dim" in content, "缺少启动配置日志"
         assert "epoch" in content and "loss" in content, "缺少 epoch/损失日志"

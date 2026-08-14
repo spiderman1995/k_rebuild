@@ -30,7 +30,8 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.evaluate import evaluate
-from src.logger import get_logger, get_machine_tag, setup_logger
+from src.logger import get_logger, setup_logger
+from src.machine import get_machine_tag
 from src.train import train
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -79,16 +80,19 @@ def run_one_dim(dim: int, args) -> dict:
     # 每个维度都重设同一种子：保证权重初始化、数据打乱顺序全部一致，
     # 消除随机性差异，让维度成为唯一变量
     torch.manual_seed(args.seed)
-    train_result = train(argparse.Namespace(
-        img_dir=args.img_dir, epochs=args.epochs, batch_size=8, lr=1e-3,
-        latent_dim=dim, alpha=1.0, device=args.device,
-        ckpt_dir=ckpt_dir, log_every=max(1, args.epochs // 5), resume=False,
-    ))
+    # 只传需要覆盖的参数，其余（batch_size/lr 等）用 train 的默认值
+    train_result = train(
+        img_dir=args.img_dir, epochs=args.epochs, latent_dim=dim,
+        device=args.device, ckpt_dir=ckpt_dir,
+        log_every=max(1, args.epochs // 5),
+    )
 
-    eval_result = evaluate(argparse.Namespace(
+    # save_images=False：只取指标，不为每个维度生成整套对比图
+    eval_result = evaluate(
         ckpt=train_result["ckpt_path"], img_dir=args.img_dir,
         out_dir=os.path.join(ckpt_dir, "eval"), device=args.device,
-    ))
+        save_images=False,
+    )
 
     record = {
         "latent_dim": dim,

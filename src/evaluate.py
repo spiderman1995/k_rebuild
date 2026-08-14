@@ -28,7 +28,8 @@ from pytorch_msssim import ssim as ssim_func
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.dataset import KLineDataset
-from src.logger import get_logger, get_machine_tag, setup_logger
+from src.logger import get_logger, setup_logger
+from src.machine import get_machine_tag
 from src.model_cae import CAE
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -71,22 +72,48 @@ def load_model(ckpt_path: str, device: torch.device) -> CAE:
     return model
 
 
-def evaluate(args) -> dict:
-    """执行完整评估流程
+def save_comparison(x: torch.Tensor, x_hat: torch.Tensor, name: str,
+                    out_dir: str):
+    """保存"原图|重建图"横向拼接对比图（单一职责：只管可视化落盘）
 
     参数:
-        args: parse_args() 返回的命名空间
+        x, x_hat: 原图与重建图, shape (1, 3, H, W)
+        name:     原文件名（输出为 compare_<name>）
+        out_dir:  输出目录
+    """
+    # dim=2 是宽度维，横向拼接为 (3, H, 2W)，左原右重建
+    pair = torch.cat([x[0], x_hat[0]], dim=2).cpu()
+    # CHW -> HWC 并还原到 0~255 的 uint8 像素
+    arr = (pair.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+    Image.fromarray(arr).save(os.path.join(out_dir, f"compare_{name}"))
+
+
+def evaluate(ckpt: str, img_dir: str, out_dir: str, device: str = None,
+             save_images: bool = True) -> dict:
+    """执行完整评估流程
+
+    显式关键字参数（接口隔离）：程序化调用只传需要的参数；
+    命令行入口用 evaluate(**vars(parse_args())) 调用。
+
+    参数:
+        ckpt:        checkpoint 路径
+        img_dir:     评估图片文件夹
+        out_dir:     指标与对比图输出目录
+        device:      计算设备，None 时自动选择
+        save_images: False 时只算指标不存对比图（供大批量实验调用）
     返回:
         dict: {'per_image': [(文件名, ssim, psnr), ...],
                'mean_ssim': 平均SSIM, 'mean_psnr': 平均PSNR}
     """
     setup_logger()  # 幂等初始化：控制台 + logs/kline_日期.log
-    device = torch.device(args.device)
-    os.makedirs(args.out_dir, exist_ok=True)
-    model = load_model(args.ckpt, device)
-    dataset = KLineDataset(args.img_dir)
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+    os.makedirs(out_dir, exist_ok=True)
+    model = load_model(ckpt, device)
+    dataset = KLineDataset(img_dir)
     log.info("评估启动 | checkpoint: %s | 样本: %d | 设备: %s",
-             args.ckpt, len(dataset), device)
+             ckpt, len(dataset), device)
 
     per_image = []
     with torch.no_grad():  # 纯评估不需要梯度，省显存提速
@@ -102,13 +129,8 @@ def evaluate(args) -> dict:
             psnr = float("inf") if mse == 0 else 10.0 * np.log10(1.0 / mse)
             per_image.append((name, s, psnr))
 
-            # 并排对比图：dim=2 是宽度维，横向拼成 (3, 448, 896)，左原右重建
-            pair = torch.cat([x[0], x_hat[0]], dim=2).cpu()
-            # CHW -> HWC 并还原到 0~255 的 uint8 像素
-            arr = (pair.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-            Image.fromarray(arr).save(
-                os.path.join(args.out_dir, f"compare_{name}")
-            )
+            if save_images:
+                save_comparison(x, x_hat, name, out_dir)
 
     mean_ssim = sum(s for _, s, _ in per_image) / len(per_image)
     mean_psnr = sum(p for _, _, p in per_image) / len(per_image)
@@ -124,10 +146,12 @@ def evaluate(args) -> dict:
     log.info("平均: SSIM=%.4f, PSNR=%.2fdB", mean_ssim, mean_psnr)
     log.info("最差 SSIM: %s (%.4f)", worst_ssim[0], worst_ssim[1])
     log.info("最差 PSNR: %s (%.2fdB)", worst_psnr[0], worst_psnr[2])
-    log.info("对比图已保存到: %s", args.out_dir)
+    if save_images:
+        log.info("对比图已保存到: %s", out_dir)
 
     return {"per_image": per_image, "mean_ssim": mean_ssim, "mean_psnr": mean_psnr}
 
 
 if __name__ == "__main__":
-    evaluate(parse_args())
+    # vars() 把 Namespace 转成字典，** 解包为关键字参数
+    evaluate(**vars(parse_args()))

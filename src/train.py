@@ -59,28 +59,89 @@ def parse_args():
     return parser.parse_args()
 
 
-def train(args) -> dict:
+def _save_ckpt(ckpt_path, model, optimizer, scheduler, latent_dim, alpha,
+               epoch, best_loss):
+    """保存 checkpoint（字段结构与 _maybe_resume 对偶，改格式时两处同改）
+
+    同时保存权重、优化器与调度器状态：评估端无需手动对齐超参数，
+    续训端可平滑衔接 Adam 动量与学习率。
+    """
+    torch.save({
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict(),
+        "latent_dim": latent_dim,
+        "alpha": alpha,
+        "epoch": epoch,
+        "loss": best_loss,
+    }, ckpt_path)
+
+
+def _maybe_resume(resume, latent_dim, ckpt_path, model, optimizer,
+                  scheduler, device):
+    """断点续训：条件满足时从 checkpoint 恢复训练状态
+
+    恢复 Adam 的动量/二阶矩与学习率调度器状态，保证续训曲线平滑衔接；
+    旧格式 checkpoint 没有这两项时跳过（Adam 冷启动会短暂扰动损失）。
+
+    返回:
+        (best_loss, start_epoch): 未续训时为 (inf, 1)
+    """
+    if not (resume and os.path.isfile(ckpt_path)):
+        return float("inf"), 1
+
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    if ckpt["latent_dim"] != latent_dim:
+        raise ValueError(
+            f"checkpoint latent_dim={ckpt['latent_dim']} "
+            f"与本次参数 {latent_dim} 不一致，拒绝续训"
+        )
+    model.load_state_dict(ckpt["model_state"])
+    if "optimizer_state" in ckpt:
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+    if "scheduler_state" in ckpt:
+        scheduler.load_state_dict(ckpt["scheduler_state"])
+    best_loss = ckpt["loss"]
+    start_epoch = ckpt["epoch"] + 1
+    log.info("断点续训：从 epoch %d 继续（历史最优损失 %.6f，lr %.2e）",
+             start_epoch, best_loss, optimizer.param_groups[0]["lr"])
+    return best_loss, start_epoch
+
+
+def train(img_dir: str, epochs: int = 300, batch_size: int = 8,
+          lr: float = 1e-3, latent_dim: int = 256, alpha: float = 1.0,
+          device: str = None, ckpt_dir: str = None, log_every: int = 10,
+          resume: bool = False) -> dict:
     """执行完整训练流程
 
+    显式关键字参数（接口隔离）：程序化调用方只传自己关心的参数，
+    其余走默认值，无需伪造完整的命令行 Namespace。
+    命令行入口用 train(**vars(parse_args())) 调用。
+
     参数:
-        args: parse_args() 返回的命令行参数命名空间
+        img_dir:    训练图片文件夹（唯一必填）
+        epochs..resume: 含义同 parse_args 中的同名命令行参数
     返回:
         dict: {'best_loss': 最优epoch平均损失, 'ckpt_path': checkpoint路径,
                'history': 每epoch平均损失列表}
     """
     setup_logger()  # 幂等初始化：控制台 + logs/kline_日期.log
-    device = torch.device(args.device)
-    os.makedirs(args.ckpt_dir, exist_ok=True)
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    if ckpt_dir is None:
+        ckpt_dir = os.path.join(ROOT, "checkpoints")
+    device = torch.device(device)
+    os.makedirs(ckpt_dir, exist_ok=True)
 
     # ---------- 数据 ----------
-    dataset = KLineDataset(args.img_dir)
+    dataset = KLineDataset(img_dir)
     # shuffle=True 每个 epoch 打乱样本顺序；小数据集下 num_workers=0 开销最低
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     # ---------- 模型 / 损失 / 优化器 ----------
-    model = CAE(latent_dim=args.latent_dim).to(device)
-    criterion = CombinedLoss(alpha=args.alpha).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    model = CAE(latent_dim=latent_dim).to(device)
+    criterion = CombinedLoss(alpha=alpha).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     # 损失停滞（10 个 epoch 不再下降）时学习率减半，帮助后期精细收敛
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=10
@@ -89,37 +150,17 @@ def train(args) -> dict:
     log.info("训练启动 | 设备: %s | 样本: %d | 参数量: %s | latent_dim: %d | "
              "batch: %d | lr: %.1e | alpha: %.2f | epochs: %d",
              device, len(dataset), f"{model.count_parameters():,}",
-             args.latent_dim, args.batch_size, args.lr, args.alpha, args.epochs)
+             latent_dim, batch_size, lr, alpha, epochs)
 
-    best_loss = float("inf")
-    start_epoch = 1
-    ckpt_path = os.path.join(args.ckpt_dir, "cae_best.pth")
-
-    # ---------- 断点续训 ----------
-    # getattr 兼容测试代码中手工构造、没有 resume 字段的 Namespace
-    if getattr(args, "resume", False) and os.path.isfile(ckpt_path):
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-        if ckpt["latent_dim"] != args.latent_dim:
-            raise ValueError(
-                f"checkpoint latent_dim={ckpt['latent_dim']} "
-                f"与本次参数 {args.latent_dim} 不一致，拒绝续训"
-            )
-        model.load_state_dict(ckpt["model_state"])
-        # 恢复 Adam 的动量/二阶矩 与 学习率调度器状态，保证续训曲线平滑衔接；
-        # 旧格式 checkpoint 没有这两项时跳过（Adam 冷启动会短暂扰动损失）
-        if "optimizer_state" in ckpt:
-            optimizer.load_state_dict(ckpt["optimizer_state"])
-        if "scheduler_state" in ckpt:
-            scheduler.load_state_dict(ckpt["scheduler_state"])
-        best_loss = ckpt["loss"]
-        start_epoch = ckpt["epoch"] + 1
-        log.info("断点续训：从 epoch %d 继续（历史最优损失 %.6f，lr %.2e）",
-                 start_epoch, best_loss, optimizer.param_groups[0]["lr"])
+    ckpt_path = os.path.join(ckpt_dir, "cae_best.pth")
+    best_loss, start_epoch = _maybe_resume(resume, latent_dim, ckpt_path,
+                                           model, optimizer, scheduler,
+                                           device)
 
     history = []  # 记录本次运行每个 epoch 的平均损失，供测试和绘图使用
     t0 = time.time()
 
-    for epoch in range(start_epoch, args.epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         model.train()  # 切换训练模式（启用 BatchNorm 的批统计更新）
         epoch_loss = 0.0
         for imgs, _names in loader:
@@ -139,28 +180,20 @@ def train(args) -> dict:
 
         if avg_loss < best_loss:
             best_loss = avg_loss
-            # checkpoint 同时保存权重、优化器状态和配置：
-            # 评估端无需手动对齐超参数，续训端可平滑衔接 Adam 动量
-            torch.save({
-                "model_state": model.state_dict(),
-                "optimizer_state": optimizer.state_dict(),
-                "scheduler_state": scheduler.state_dict(),
-                "latent_dim": args.latent_dim,
-                "alpha": args.alpha,
-                "epoch": epoch,
-                "loss": best_loss,
-            }, ckpt_path)
+            _save_ckpt(ckpt_path, model, optimizer, scheduler,
+                       latent_dim, alpha, epoch, best_loss)
             # debug 级别：INFO 下不刷屏，排查 checkpoint 问题时把级别调低即可看到
             log.debug("checkpoint 更新于 epoch %d（loss %.6f）", epoch, best_loss)
 
-        if epoch % args.log_every == 0 or epoch == 1:
+        if epoch % log_every == 0 or epoch == 1:
             lr_now = optimizer.param_groups[0]["lr"]  # 当前学习率（可能已被调度器衰减）
             log.info("epoch %4d/%d | loss %.6f | best %.6f | lr %.2e | 耗时 %.0fs",
-                     epoch, args.epochs, avg_loss, best_loss, lr_now, time.time() - t0)
+                     epoch, epochs, avg_loss, best_loss, lr_now, time.time() - t0)
 
     log.info("训练完成，最优损失 %.6f，checkpoint: %s", best_loss, ckpt_path)
     return {"best_loss": best_loss, "ckpt_path": ckpt_path, "history": history}
 
 
 if __name__ == "__main__":
-    train(parse_args())
+    # vars() 把 Namespace 转成字典，** 解包为关键字参数
+    train(**vars(parse_args()))

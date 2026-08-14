@@ -35,6 +35,19 @@ def test_encode():
     assert z.shape == (1, EMBED_DIM)
 
 
+def test_latent_dim_contract():
+    """里氏替换契约（12-L）：MAE 与 CAE 同样通过 latent_dim 读取 z 维度"""
+    from src.model_cae import CAE
+    mae = MAE()
+    assert mae.latent_dim == EMBED_DIM, "MAE.latent_dim 应等于 embed_dim"
+    # z 的实际维度必须与 latent_dim 属性一致（契约的实质）
+    _x_hat, z = mae(torch.rand(1, 3, 224, 224))
+    assert z.shape[1] == mae.latent_dim
+    cae = CAE(latent_dim=64, input_size=224)
+    _x_hat, z = cae(torch.rand(1, 3, 224, 224))
+    assert z.shape[1] == cae.latent_dim
+
+
 def test_gradients_reach_all_parameters():
     """梯度可达全部参数（含 pos_embed 和 Transformer 各层）"""
     model = MAE(depth=2)  # 浅层版加快测试

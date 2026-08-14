@@ -28,7 +28,7 @@ matplotlib.rcParams["axes.unicode_minus"] = False  # 负号正常显示
 SPLIT_TITLES = {"train": "训练集", "val": "验证集", "test": "测试集"}
 
 
-def plot_curves(history: dict, epochs: int, out_path: str):
+def plot_curves(history: dict, out_path: str):
     """绘制损失曲线：训练/验证/测试各一张子图，每张子图放所有方法的曲线
 
     布局按用户要求（2026-08-13）：同一切分下所有方法同框，方法间直接对比。
@@ -37,7 +37,6 @@ def plot_curves(history: dict, epochs: int, out_path: str):
 
     参数:
         history:  {方法名: {'label':.., 'train': [...], 'val': [...], 'test': [...]}}
-        epochs:   兼容保留参数（横轴实际按各组历史长度决定）
         out_path: 输出 PNG 路径
     """
     # 三张子图横排：训练 | 验证 | 测试
@@ -67,7 +66,7 @@ def main():
 
     with open(args.json, encoding="utf-8") as f:
         data = json.load(f)
-    plot_curves(data["history"], data["epochs"], args.out)
+    plot_curves(data["history"], args.out)
     print(f"曲线图已保存: {args.out}")
 
 

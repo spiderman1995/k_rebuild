@@ -76,6 +76,31 @@ def test_compare4_machinery():
         shutil.rmtree(TMP_DIR, ignore_errors=True)
 
 
+def test_make_optimizer_by_structure():
+    """开闭原则修复（12-O）：按参数名前缀而非方法名清单决定分组学习率
+
+    含 backbone.* 参数的模型 → 两组学习率（主干 0.1x）；
+    不含的 → 单组统一学习率。不依赖任何具体方法名。
+    """
+    from src.experiment_compare4 import make_optimizer
+
+    class FakePretrained(torch.nn.Module):
+        """带 backbone 子模块的假模型（模拟预训练微调场景）"""
+        def __init__(self):
+            super().__init__()
+            self.backbone = torch.nn.Linear(4, 4)
+            self.head = torch.nn.Linear(4, 4)
+
+    opt = make_optimizer(FakePretrained(), lr=1e-3)
+    assert len(opt.param_groups) == 2, "含 backbone 应分两组"
+    assert abs(opt.param_groups[0]["lr"] - 1e-4) < 1e-12, "主干应为 0.1x 学习率"
+    assert abs(opt.param_groups[1]["lr"] - 1e-3) < 1e-12, "其余应为全速学习率"
+
+    opt = make_optimizer(torch.nn.Linear(4, 4), lr=1e-3)
+    assert len(opt.param_groups) == 1, "无 backbone 应单组"
+    assert abs(opt.param_groups[0]["lr"] - 1e-3) < 1e-12
+
+
 def test_plot_mixed_lengths():
     """混合长度曲线出图：合并 20ep 与 50ep 历史时画图不应崩溃
 

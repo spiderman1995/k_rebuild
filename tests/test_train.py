@@ -57,7 +57,8 @@ def test_smoke_training():
     tmp_dir = os.path.join(ROOT, "tests", "_smoke_ckpt_tmp")
     torch.manual_seed(42)  # 固定随机种子，保证测试结果可复现
     try:
-        result = train(_smoke_args(tmp_dir))
+        # vars() 把 Namespace 转成字典后按关键字传入（接口隔离改造）
+        result = train(**vars(_smoke_args(tmp_dir)))
         _assert_gates(result)
     finally:
         # shutil.rmtree 递归删除临时目录；ignore_errors 防止文件占用导致测试报错

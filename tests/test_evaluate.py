@@ -46,13 +46,12 @@ def test_evaluate_machinery():
     out_dir = os.path.join(TMP_DIR, "results")
     try:
         _make_untrained_checkpoint(ckpt_path)
-        args = argparse.Namespace(
+        result = evaluate(
             ckpt=ckpt_path,
             img_dir=os.path.join(ROOT, "tests", "fixtures", "kline36"),
             out_dir=out_dir,
             device="cuda" if torch.cuda.is_available() else "cpu",
         )
-        result = evaluate(args)
 
         # 关卡 1：指标表行数 = 36
         per_image = result["per_image"]
