@@ -100,3 +100,23 @@ def test_input_size_invalid():
     import pytest
     with pytest.raises(ValueError):
         CAE(latent_dim=64, input_size=300)
+
+
+def test_residual_decoder_512_contract():
+    """新统一解码器必须只接收真实 512 维 z，并保持前向/反向完整。"""
+    model = CAE(latent_dim=512, input_size=224,
+                decoder_init_seed=42, decoder_variant="residual")
+    x = torch.rand(1, 3, 224, 224)
+    x_hat, z = model(x)
+    assert z.shape == (1, 512)
+    assert x_hat.shape == x.shape
+    ((x_hat - x) ** 2).mean().backward()
+    for name, p in model.named_parameters():
+        assert p.grad is not None, f"残差解码器参数 {name} 无梯度"
+
+
+def test_decoder_variant_validation():
+    """未知解码器版本必须显式报错，不能静默退回其他结构。"""
+    import pytest
+    with pytest.raises(ValueError, match="decoder variant"):
+        CAE(latent_dim=512, input_size=224, decoder_variant="unknown")

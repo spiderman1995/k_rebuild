@@ -117,10 +117,12 @@ def test_unified_decoder_identical_across_models():
     from src.model_mae import MAEUnified
 
     try:
-        uni = MAEUnified(latent_dim=256, decoder_init_seed=42)
+        uni = MAEUnified(latent_dim=512, decoder_init_seed=42,
+                         decoder_variant="residual")
     except Exception as e:
         pytest.skip(f"预训练权重不可得: {e}")
-    cae = CAE(latent_dim=256, input_size=224, decoder_init_seed=42)
+    cae = CAE(latent_dim=512, input_size=224, decoder_init_seed=42,
+              decoder_variant="residual")
 
     # 核心断言：两个模型的解码器（fc + conv 全部张量）初始权重逐位相等
     uni_sd = {**dict(uni.decoder_fc.state_dict()),
@@ -135,7 +137,8 @@ def test_unified_decoder_identical_across_models():
     x = torch.rand(2, 3, 224, 224)
     x_hat, z = uni(x)
     assert x_hat.shape == (2, 3, 224, 224)
-    assert z.shape == (2, 256)
+    assert z.shape == (2, 512)
+    assert uni.pre_projection_dim == 192
     ((x_hat - x) ** 2).mean().backward()
     for name, p in uni.named_parameters():
         assert p.grad is not None, f"参数 {name} 无梯度"

@@ -60,8 +60,42 @@ def _deconv_block(in_ch: int, out_ch: int) -> nn.Sequential:
     )
 
 
+def _group_count(channels: int) -> int:
+    """返回可整除 channels 的 GroupNorm 组数（优先每组至少 8 个通道）。"""
+    for groups in (32, 16, 8, 4, 2, 1):
+        if channels % groups == 0 and channels // groups >= 8:
+            return groups
+    return 1
+
+
+class ResidualUpsampleBlock(nn.Module):
+    """适度增强的上采样残差块：稳定小 batch 训练并改善细线重建。
+
+    最近邻上采样仍与旧版一致；主分支增加第二个 3x3 卷积，旁路保留
+    低频信息。GroupNorm 不依赖 batch 统计，适合 224/448 图片导致的小 batch。
+    """
+
+    def __init__(self, in_ch: int, out_ch: int):
+        super().__init__()
+        self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
+        self.conv1 = nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)
+        self.norm1 = nn.GroupNorm(_group_count(out_ch), out_ch)
+        self.conv2 = nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1)
+        self.norm2 = nn.GroupNorm(_group_count(out_ch), out_ch)
+        self.skip = (nn.Identity() if in_ch == out_ch
+                     else nn.Conv2d(in_ch, out_ch, kernel_size=1))
+        self.act = nn.SiLU(inplace=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.upsample(x)
+        residual = self.skip(x)
+        x = self.act(self.norm1(self.conv1(x)))
+        x = self.norm2(self.conv2(x))
+        return self.act(x + residual)
+
+
 def build_decoder(latent_dim: int, input_size: int = 448,
-                  init_seed: int = None):
+                  init_seed: int = None, variant: str = "legacy"):
     """构造 CAE 同款解码器，返回 (decoder_fc, decoder_conv) 两个模块
 
     供 CAE 自身与"统一解码器"对照实验（不同编码器共享同一解码器）使用。
@@ -72,11 +106,15 @@ def build_decoder(latent_dim: int, input_size: int = 448,
         init_seed:  不为 None 时，先临时固定随机种子再建层、随后恢复
                     原随机状态——多次调用（乃至不同模型里调用）得到的
                     解码器初始权重**逐位一致**，实现严格的控制变量
+        variant:    legacy=历史 BatchNorm 单卷积块；residual=GroupNorm
+                    双卷积残差块。保留 legacy 以兼容既有 checkpoint。
     返回:
         (decoder_fc, decoder_conv):
             decoder_fc:   Linear(latent_dim -> 512*7*7)
             decoder_conv: 上采样堆栈, (B,512,7,7) -> (B,3,S,S) + Sigmoid
     """
+    if variant not in {"legacy", "residual"}:
+        raise ValueError(f"未知 decoder variant: {variant}")
     channels = ENCODER_CHANNELS[input_size]
 
     def _make():
@@ -85,7 +123,8 @@ def build_decoder(latent_dim: int, input_size: int = 448,
         # (输入通道, 输出通道) 对，如 448 版: (512,512),(512,256)...(64,32)，
         # 自然得到 len-1 个上采样块（448:5 块 7→224；224:4 块 7→112）
         rev = channels[::-1]
-        blocks = [_deconv_block(i, o) for i, o in zip(rev, rev[1:])]
+        block = _deconv_block if variant == "legacy" else ResidualUpsampleBlock
+        blocks = [block(i, o) for i, o in zip(rev, rev[1:])]
         conv = nn.Sequential(
             *blocks,
             nn.Upsample(scale_factor=2, mode="nearest"),
@@ -108,7 +147,7 @@ class CAE(nn.Module):
     """卷积自编码器
 
     参数:
-        latent_dim: 特征向量 z 的维度（默认 256）。
+        latent_dim: 特征向量 z 的维度（当前正式接口默认 512）。
                     这是"特征是否充分"实验的核心可调参数，
                     可从大到小尝试（512/256/128/64）找最小充分维度。
         input_size: 输入图片边长，支持 448（默认，原图）和 224（降采样图）。
@@ -116,10 +155,13 @@ class CAE(nn.Module):
         decoder_init_seed: 不为 None 时解码器用该种子独立初始化（见
                     build_decoder），供"统一解码器"对照实验保证各组
                     解码器初始权重一致；默认 None 沿用全局随机流
+        decoder_variant: legacy 保持历史 checkpoint 兼容；residual 为当前
+                    正式对照使用的 GroupNorm 残差解码器
     """
 
-    def __init__(self, latent_dim: int = 256, input_size: int = 448,
-                 decoder_init_seed: int = None):
+    def __init__(self, latent_dim: int = 512, input_size: int = 448,
+                 decoder_init_seed: int = None,
+                 decoder_variant: str = "legacy"):
         super().__init__()
         if input_size not in ENCODER_CHANNELS:
             raise ValueError(
@@ -127,6 +169,7 @@ class CAE(nn.Module):
             )
         self.latent_dim = latent_dim
         self.input_size = input_size
+        self.decoder_variant = decoder_variant
         channels = ENCODER_CHANNELS[input_size]
 
         # ---------- 编码器 ----------
@@ -146,7 +189,7 @@ class CAE(nn.Module):
         # 结构见 build_decoder：Linear 恢复 512×7×7 + 对称上采样堆栈；
         # 抽成共享构造函数是为了让其他编码器（如 ViT）能用同一个解码器
         self.decoder_fc, self.decoder_conv = build_decoder(
-            latent_dim, input_size, decoder_init_seed
+            latent_dim, input_size, decoder_init_seed, decoder_variant
         )
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:

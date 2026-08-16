@@ -41,8 +41,8 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=8,
                         help="批大小（6GB 显存下 448 输入建议 <=8）")
     parser.add_argument("--lr", type=float, default=1e-3, help="Adam 初始学习率")
-    parser.add_argument("--latent-dim", type=int, default=256,
-                        help="特征向量维度（特征充分性实验的核心变量）")
+    parser.add_argument("--latent-dim", type=int, default=512,
+                        help="特征向量维度（当前正式特征接口统一为512）")
     # 默认纯 MSE（alpha=1）：实验发现 SSIM 项在训练早期会把梯度引向
     # "输出全白背景"的退化解（白色占91%像素，SSIM对背景过于满意），
     # 纯 MSE 能更快学到 K 线结构；SSIM 保留为评估指标。详见 开发计划.md 阶段4记录
@@ -110,7 +110,7 @@ def _maybe_resume(resume, latent_dim, ckpt_path, model, optimizer,
 
 
 def train(img_dir: str, epochs: int = 300, batch_size: int = 8,
-          lr: float = 1e-3, latent_dim: int = 256, alpha: float = 1.0,
+          lr: float = 1e-3, latent_dim: int = 512, alpha: float = 1.0,
           device: str = None, ckpt_dir: str = None, log_every: int = 10,
           resume: bool = False) -> dict:
     """执行完整训练流程

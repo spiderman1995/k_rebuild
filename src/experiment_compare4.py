@@ -63,6 +63,11 @@ METHODS = {
 }
 # 验证/测试破坏图案的固定种子（与训练随机破坏区分开）
 EVAL_CORRUPT_SEED = 12345
+# 正式对照统一使用真实 512 维接口；旧版 mae/mae_pre 固定 192 维，仅保留
+# 历史复现用途，不属于当前统一维度协议。
+FEATURE_DIM = 512
+# 新实验采用适度增强的 GroupNorm 残差解码器；legacy 仍可加载历史模型。
+SHARED_DECODER_VARIANT = "residual"
 
 
 def parse_args():
@@ -73,14 +78,15 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=20, help="每组训练轮数")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3, help="Adam 学习率")
-    parser.add_argument("--latent-dim", type=int, default=256, help="CAE 特征维度")
+    parser.add_argument("--latent-dim", type=int, default=FEATURE_DIM,
+                        help="统一特征维度（正式实验固定为512）")
     parser.add_argument("--seed", type=int, default=42, help="划分与初始化种子")
     # 默认输出按机器分文件夹（results/<机器标识>/compare4），防多机 git 冲突
     parser.add_argument("--out-dir",
                         default=os.path.join(ROOT, "results", MACHINE, "compare4"))
     parser.add_argument("--ckpt-dir",
                         default=os.path.join(ROOT, "checkpoints", MACHINE, "compare4"))
-    parser.add_argument("--methods", default="cae,inpaint,mae,color",
+    parser.add_argument("--methods", default="cae,inpaint,color,mae_uni",
                         help="逗号分隔的方法子集（调试用）")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
@@ -99,8 +105,14 @@ def build_model(method: str, latent_dim: int, seed: int) -> torch.nn.Module:
         return MAE(pretrained=True)
     if method == "mae_uni":
         from src.model_mae import MAEUnified
-        return MAEUnified(latent_dim=latent_dim, decoder_init_seed=seed)
-    return CAE(latent_dim=latent_dim, input_size=224, decoder_init_seed=seed)
+        return MAEUnified(
+            latent_dim=latent_dim, decoder_init_seed=seed,
+            decoder_variant=SHARED_DECODER_VARIANT,
+        )
+    return CAE(
+        latent_dim=latent_dim, input_size=224, decoder_init_seed=seed,
+        decoder_variant=SHARED_DECODER_VARIANT,
+    )
 
 
 def make_optimizer(model: torch.nn.Module, lr: float):
@@ -227,10 +239,29 @@ def train_one_method(method: str, loaders: tuple, args, device) -> dict:
     label, corrupt_fn = METHODS[method]
     torch.manual_seed(args.seed)  # 每组同种子初始化，控制变量
     model = build_model(method, args.latent_dim, args.seed).to(device)
+    if model.latent_dim != args.latent_dim:
+        log.warning(
+            "[%s] 实际特征维度为 %d，不符合本次统一维度 %d；"
+            "该方法仅可作历史参考，不能纳入当前公平对比",
+            label, model.latent_dim, args.latent_dim,
+        )
+    pre_projection_dim = getattr(model, "pre_projection_dim", None)
+    if pre_projection_dim is not None and pre_projection_dim < model.latent_dim:
+        log.warning(
+            "[%s] 输出形状虽为 %d 维，但投影前只有 %d 维；"
+            "在编码器结构调整前不能视为真实 %d 维信息瓶颈",
+            label, model.latent_dim, pre_projection_dim, model.latent_dim,
+        )
     optimizer = make_optimizer(model, args.lr)
     log.info("[%s] 开始训练 | 参数量 %s", label, f"{model.count_parameters():,}")
 
-    h = {"label": label, "train": [], "val": [], "test": []}
+    h = {
+        "label": label,
+        "feature_dim": model.latent_dim,
+        "pre_projection_dim": getattr(model, "pre_projection_dim", None),
+        "decoder_variant": getattr(model, "decoder_variant", "token_linear"),
+        "train": [], "val": [], "test": [],
+    }
     t0 = time.time()
     for ep in range(1, args.epochs + 1):
         tr = run_epoch(model, train_loader, corrupt_fn, device, optimizer)
@@ -249,7 +280,9 @@ def train_one_method(method: str, loaders: tuple, args, device) -> dict:
     # mae/mae_pre 的维度固定为 192，与命令行 --latent-dim 无关，
     # 若记录 args.latent_dim 会误导后续加载方
     torch.save({"model_state": model.state_dict(), "method": method,
-                "latent_dim": model.latent_dim, "epochs": args.epochs},
+                "latent_dim": model.latent_dim, "epochs": args.epochs,
+                "pre_projection_dim": getattr(model, "pre_projection_dim", None),
+                "decoder_variant": getattr(model, "decoder_variant", None)},
                os.path.join(args.ckpt_dir, f"{method}.pth"))
     return h
 

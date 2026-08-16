@@ -153,11 +153,14 @@ class MAEUnified(nn.Module):
                 decoder_init_seed 可与 CNN 组做到**初始权重逐位一致**
 
     参数:
-        latent_dim:        特征 z 维度（与 CNN 组保持一致，默认 256）
+        latent_dim:        特征 z 维度（与 CNN 组保持一致，默认 512）
         decoder_init_seed: 解码器初始化种子（四组传同一值即严格控制变量）
+        decoder_variant:   共享解码器版本；新实验使用 residual，legacy 用于
+                           兼容历史 checkpoint
     """
 
-    def __init__(self, latent_dim: int = 256, decoder_init_seed: int = None):
+    def __init__(self, latent_dim: int = 512, decoder_init_seed: int = None,
+                 decoder_variant: str = "legacy"):
         super().__init__()
         # 延迟 import：只有用到本类才要求装 timm
         import timm
@@ -166,6 +169,8 @@ class MAEUnified(nn.Module):
                                    build_decoder)
 
         self.latent_dim = latent_dim
+        self.pre_projection_dim = EMBED_DIM
+        self.decoder_variant = decoder_variant
         self.backbone = timm.create_model(
             "vit_tiny_patch16_224.augreg_in21k_ft_in1k",
             pretrained=True, num_classes=0,
@@ -179,7 +184,8 @@ class MAEUnified(nn.Module):
         self.proj = nn.Linear(EMBED_DIM, latent_dim)
         # CAE 同款解码器（224 版），种子固定时与 CNN 组初始权重逐位一致
         self.decoder_fc, self.decoder_conv = build_decoder(
-            latent_dim, input_size=224, init_seed=decoder_init_seed
+            latent_dim, input_size=224, init_seed=decoder_init_seed,
+            variant=decoder_variant
         )
         self._bottleneck_shape = (BOTTLENECK_CHANNELS, BOTTLENECK_SIZE,
                                   BOTTLENECK_SIZE)
