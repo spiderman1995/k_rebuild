@@ -1,0 +1,1084 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="三组 K 线图重建任务的编码器与解码器网络架构对比">
+  <title>三组编码器与解码器架构对比</title>
+  <style>
+    :root {
+      --paper: #f4f1ea;
+      --surface: rgba(255, 255, 255, 0.82);
+      --surface-solid: #fffdf8;
+      --surface-2: #ebe7df;
+      --ink: #19211e;
+      --muted: #65706b;
+      --line: #d8d5cd;
+      --line-strong: #b9bcb5;
+      --green: #16745a;
+      --green-dark: #0e5440;
+      --green-soft: #dcefe7;
+      --blue: #315d8a;
+      --blue-soft: #e4edf7;
+      --violet: #6a4a91;
+      --violet-soft: #eee7f7;
+      --amber: #a86216;
+      --amber-soft: #fff0d8;
+      --red: #a54136;
+      --shadow: 0 18px 50px rgba(33, 43, 38, 0.09);
+      --radius: 22px;
+      --radius-sm: 13px;
+      --max: 1500px;
+    }
+
+    html[data-theme="dark"] {
+      --paper: #121714;
+      --surface: rgba(28, 35, 31, 0.88);
+      --surface-solid: #1b221e;
+      --surface-2: #252d28;
+      --ink: #edf4ef;
+      --muted: #a7b3ac;
+      --line: #39433d;
+      --line-strong: #526057;
+      --green: #70d1ae;
+      --green-dark: #9ce2c8;
+      --green-soft: #17392e;
+      --blue: #8dbbe8;
+      --blue-soft: #1d3347;
+      --violet: #c2a0eb;
+      --violet-soft: #36284a;
+      --amber: #f0b868;
+      --amber-soft: #49331a;
+      --red: #ef968d;
+      --shadow: 0 18px 55px rgba(0, 0, 0, 0.25);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 88% 4%, rgba(106, 74, 145, 0.13), transparent 24rem),
+        radial-gradient(circle at 8% 13%, rgba(22, 116, 90, 0.13), transparent 27rem),
+        var(--paper);
+      font-family: Inter, "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, a { font: inherit; }
+    a { color: var(--green); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    a:hover { color: var(--green-dark); }
+    code, .mono {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.93em;
+    }
+
+    .page-shell {
+      width: min(calc(100% - 36px), var(--max));
+      margin: 0 auto;
+    }
+
+    .topbar {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+      background: color-mix(in srgb, var(--paper) 84%, transparent);
+      backdrop-filter: blur(16px);
+    }
+
+    .topbar-inner {
+      min-height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 760;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border-radius: 8px;
+      color: white;
+      background: var(--green-dark);
+      font-size: 13px;
+    }
+
+    .top-actions { display: flex; align-items: center; gap: 8px; }
+    .top-actions a { display: inline-flex; color: var(--muted); text-decoration: none; }
+
+    .icon-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 36px;
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ink);
+      background: var(--surface);
+      cursor: pointer;
+    }
+
+    .icon-button:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+    .icon-button svg { width: 16px; height: 16px; }
+
+    main { padding: 34px 0 70px; }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: clamp(28px, 5vw, 68px);
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .hero::after {
+      position: absolute;
+      right: -110px;
+      bottom: -150px;
+      width: 430px;
+      height: 430px;
+      border: 75px solid color-mix(in srgb, var(--green) 13%, transparent);
+      border-radius: 50%;
+      content: "";
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      color: var(--green-dark);
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      width: 24px;
+      height: 2px;
+      border-radius: 2px;
+      background: currentColor;
+      content: "";
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      max-width: 930px;
+      margin-bottom: 18px;
+      font-size: clamp(40px, 7vw, 84px);
+      line-height: 1.04;
+      letter-spacing: -0.055em;
+    }
+
+    .hero-lead {
+      max-width: 920px;
+      margin-bottom: 28px;
+      color: var(--muted);
+      font-size: clamp(16px, 2vw, 21px);
+    }
+
+    .hero-lead strong { color: var(--ink); }
+
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 9px; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 31px;
+      padding: 5px 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: color-mix(in srgb, var(--surface-solid) 76%, transparent);
+      font-size: 12px;
+      font-weight: 680;
+    }
+
+    .pill.green { border-color: color-mix(in srgb, var(--green) 32%, var(--line)); color: var(--green-dark); background: var(--green-soft); }
+    .pill.amber { border-color: color-mix(in srgb, var(--amber) 36%, var(--line)); color: var(--amber); background: var(--amber-soft); }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin: 18px 0 58px;
+    }
+
+    .summary-card {
+      min-height: 162px;
+      padding: 25px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 8px 24px rgba(30, 40, 35, 0.05);
+    }
+
+    .summary-number {
+      display: block;
+      margin-bottom: 3px;
+      color: var(--green-dark);
+      font-size: 50px;
+      font-weight: 820;
+      line-height: 1;
+      letter-spacing: -0.06em;
+    }
+
+    .summary-card h3 { margin: 9px 0 4px; font-size: 17px; }
+    .summary-card p { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .section { margin-top: 64px; scroll-margin-top: 82px; }
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 28px;
+      margin-bottom: 22px;
+    }
+
+    .section-kicker {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 780;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      margin-bottom: 0;
+      font-size: clamp(27px, 4vw, 43px);
+      line-height: 1.14;
+      letter-spacing: -0.035em;
+    }
+
+    .section-note { max-width: 610px; margin: 0; color: var(--muted); font-size: 14px; }
+
+    .relation-panel {
+      overflow: hidden;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .lane-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .lane {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-width: 0;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: color-mix(in srgb, var(--surface-solid) 88%, transparent);
+    }
+
+    .lane::after {
+      position: absolute;
+      right: 50%;
+      bottom: -25px;
+      width: 1px;
+      height: 24px;
+      background: var(--line-strong);
+      content: "";
+    }
+
+    .lane-head { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
+    .lane-index {
+      display: grid;
+      flex: 0 0 auto;
+      width: 31px;
+      height: 31px;
+      place-items: center;
+      border-radius: 10px;
+      color: white;
+      background: var(--green-dark);
+      font-size: 13px;
+      font-weight: 760;
+    }
+
+    .lane.vit .lane-index { background: var(--violet); }
+    .lane-title { margin: 2px 0 0; font-size: 15px; line-height: 1.25; }
+    .mini-label { color: var(--muted); font-size: 10px; font-weight: 760; letter-spacing: 0.08em; text-transform: uppercase; }
+
+    .flow-box {
+      position: relative;
+      min-height: 70px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface-2);
+    }
+
+    .flow-box + .flow-box::before {
+      position: absolute;
+      top: -11px;
+      left: 50%;
+      width: 1px;
+      height: 10px;
+      background: var(--line-strong);
+      content: "";
+    }
+
+    .flow-box .box-title { display: block; margin-top: 3px; font-size: 13px; font-weight: 750; line-height: 1.35; }
+    .flow-box .box-copy { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+    .flow-box.encoder.cnn { border-color: color-mix(in srgb, var(--green) 34%, var(--line)); background: var(--green-soft); }
+    .flow-box.encoder.vit { border-color: color-mix(in srgb, var(--violet) 34%, var(--line)); background: var(--violet-soft); }
+    .flow-box.latent { border-style: dashed; background: transparent; text-align: center; }
+
+    .shared-band {
+      position: relative;
+      margin-top: 24px;
+      padding: 22px;
+      border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--line));
+      border-radius: 17px;
+      background: var(--blue-soft);
+      text-align: center;
+    }
+
+    .shared-band strong { display: block; font-size: 18px; }
+    .shared-band p { margin: 4px auto 0; color: var(--muted); font-size: 12px; }
+
+    .output-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .output-box {
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--surface-solid);
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .legend-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 17px; color: var(--muted); font-size: 11px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 7px; }
+    .legend-swatch { width: 18px; height: 8px; border-radius: 999px; background: var(--green-soft); border: 1px solid var(--green); }
+    .legend-swatch.vit { background: var(--violet-soft); border-color: var(--violet); }
+    .legend-swatch.decoder { background: var(--blue-soft); border-color: var(--blue); }
+
+    .architecture-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    .arch-card {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .arch-card.full { grid-column: 1 / -1; }
+    .arch-card-head { padding: 23px 24px 19px; border-bottom: 1px solid var(--line); }
+    .arch-card-head.green { background: linear-gradient(135deg, var(--green-soft), transparent); }
+    .arch-card-head.violet { background: linear-gradient(135deg, var(--violet-soft), transparent); }
+    .arch-card-head.blue { background: linear-gradient(135deg, var(--blue-soft), transparent); }
+    .arch-card-head h3 { margin: 2px 0 5px; font-size: 21px; letter-spacing: -0.02em; }
+    .arch-card-head p { margin: 0; color: var(--muted); font-size: 13px; }
+    .arch-card-body { padding: 22px 24px 25px; }
+
+    .layer-chain {
+      display: flex;
+      align-items: stretch;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 3px 2px 14px;
+      scrollbar-width: thin;
+    }
+
+    .layer {
+      position: relative;
+      display: flex;
+      flex: 0 0 112px;
+      min-height: 106px;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--surface-solid);
+    }
+
+    .layer:not(:last-child)::after {
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      right: -8px;
+      width: 9px;
+      height: 1px;
+      background: var(--line-strong);
+      content: "";
+    }
+
+    .layer-name { color: var(--muted); font-size: 9px; font-weight: 780; letter-spacing: 0.06em; text-transform: uppercase; }
+    .layer-shape { margin: 6px 0; font-size: 13px; font-weight: 800; line-height: 1.25; }
+    .layer-op { color: var(--muted); font-size: 9px; line-height: 1.35; }
+    .layer.focus-green { border-color: color-mix(in srgb, var(--green) 40%, var(--line)); background: var(--green-soft); }
+    .layer.focus-violet { border-color: color-mix(in srgb, var(--violet) 40%, var(--line)); background: var(--violet-soft); }
+    .layer.focus-blue { border-color: color-mix(in srgb, var(--blue) 40%, var(--line)); background: var(--blue-soft); }
+    .layer.warn { border-color: color-mix(in srgb, var(--amber) 48%, var(--line)); background: var(--amber-soft); }
+
+    .spec-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .spec {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: color-mix(in srgb, var(--surface-solid) 72%, transparent);
+    }
+
+    .spec span { display: block; color: var(--muted); font-size: 10px; }
+    .spec strong { display: block; margin-top: 2px; font-size: 13px; }
+
+    .decoder-stages {
+      display: grid;
+      grid-template-columns: 0.78fr repeat(4, 1fr) 0.78fr;
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    .decoder-stage {
+      position: relative;
+      display: flex;
+      min-height: 142px;
+      flex-direction: column;
+      justify-content: center;
+      padding: 13px;
+      border: 1px solid color-mix(in srgb, var(--blue) 32%, var(--line));
+      border-radius: 12px;
+      background: var(--blue-soft);
+      text-align: center;
+    }
+
+    .decoder-stage:not(:last-child)::after {
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      right: -9px;
+      width: 9px;
+      height: 1px;
+      background: var(--blue);
+      content: "";
+    }
+
+    .decoder-stage .stage-index { color: var(--blue); font-size: 10px; font-weight: 800; }
+    .decoder-stage .stage-shape { margin: 7px 0; font-size: 14px; font-weight: 820; line-height: 1.25; }
+    .decoder-stage .stage-op { color: var(--muted); font-size: 9px; line-height: 1.35; }
+    .decoder-stage.edge { border-style: dashed; background: transparent; }
+
+    .residual-anatomy {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 12px;
+      align-items: center;
+      margin-top: 18px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: var(--surface-2);
+    }
+
+    .branch { padding: 12px; border-radius: 10px; background: var(--surface-solid); font-size: 11px; }
+    .branch strong { display: block; margin-bottom: 4px; }
+    .plus { display: grid; width: 31px; height: 31px; place-items: center; border-radius: 50%; color: white; background: var(--blue); font-weight: 800; }
+
+    .compare-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    table { width: 100%; min-width: 1020px; border-collapse: collapse; }
+    th, td { padding: 15px 16px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; font-size: 12px; }
+    th { position: sticky; top: 60px; z-index: 5; color: var(--muted); background: var(--surface-solid); font-size: 11px; letter-spacing: 0.04em; }
+    th:first-child, td:first-child { width: 140px; color: var(--muted); font-weight: 730; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover td { background: color-mix(in srgb, var(--green-soft) 28%, transparent); }
+    td strong { color: var(--ink); }
+
+    .status-good, .status-watch {
+      display: inline-flex;
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 760;
+    }
+
+    .status-good { color: var(--green-dark); background: var(--green-soft); }
+    .status-watch { color: var(--amber); background: var(--amber-soft); }
+
+    .parameter-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    .parameter-card {
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .parameter-card h3 { margin-bottom: 4px; font-size: 19px; }
+    .parameter-total { margin-bottom: 18px; color: var(--muted); font-size: 12px; }
+    .parameter-total strong { color: var(--ink); font-size: 27px; letter-spacing: -0.04em; }
+    .bar { display: flex; overflow: hidden; height: 15px; border-radius: 999px; background: var(--surface-2); }
+    .bar-encoder { background: var(--green); }
+    .parameter-card.vit .bar-encoder { background: var(--violet); }
+    .bar-decoder { background: var(--blue); }
+    .bar-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 11px; color: var(--muted); font-size: 11px; }
+    .bar-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; background: var(--green); }
+    .parameter-card.vit .bar-legend i.encoder { background: var(--violet); }
+    .bar-legend i.decoder { background: var(--blue); }
+
+    .callout-grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 18px; }
+    .callout {
+      padding: 25px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .callout.warning { border-color: color-mix(in srgb, var(--amber) 45%, var(--line)); background: linear-gradient(135deg, var(--amber-soft), var(--surface)); }
+    .callout h3 { margin-bottom: 8px; font-size: 19px; }
+    .callout p, .callout li { color: var(--muted); font-size: 13px; }
+    .callout p:last-child { margin-bottom: 0; }
+    .callout ul { margin: 10px 0 0; padding-left: 19px; }
+    .callout li + li { margin-top: 7px; }
+
+    .rank-line {
+      display: grid;
+      grid-template-columns: 192fr 320fr;
+      overflow: hidden;
+      height: 34px;
+      margin: 17px 0 9px;
+      border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--line));
+      border-radius: 9px;
+    }
+
+    .rank-real, .rank-formal { display: grid; place-items: center; font-size: 10px; font-weight: 780; }
+    .rank-real { color: white; background: var(--amber); }
+    .rank-formal { color: var(--amber); background: repeating-linear-gradient(135deg, transparent, transparent 6px, color-mix(in srgb, var(--amber) 13%, transparent) 6px, color-mix(in srgb, var(--amber) 13%, transparent) 12px); }
+
+    .source-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .source-link {
+      display: block;
+      padding: 13px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      color: var(--ink);
+      background: var(--surface-solid);
+      text-decoration: none;
+    }
+
+    .source-link:hover { border-color: var(--green); }
+    .source-link strong, .source-link span { display: block; }
+    .source-link strong { font-size: 12px; }
+    .source-link span { margin-top: 2px; color: var(--muted); font-size: 10px; }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      margin-top: 50px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+    @media (max-width: 1080px) {
+      .lane-grid { grid-template-columns: 1fr 1fr; }
+      .lane::after { display: none; }
+      .output-grid { grid-template-columns: 1fr 1fr; }
+      .decoder-stages { grid-template-columns: repeat(3, 1fr); }
+      .decoder-stage:nth-child(3)::after { display: none; }
+    }
+
+    @media (max-width: 780px) {
+      .page-shell { width: min(calc(100% - 22px), var(--max)); }
+      .top-actions a, .button-label { display: none; }
+      main { padding-top: 18px; }
+      .hero { border-radius: 23px; }
+      .summary-grid, .architecture-grid, .parameter-grid, .callout-grid, .source-list { grid-template-columns: 1fr; }
+      .arch-card.full { grid-column: auto; }
+      .section-head { display: block; }
+      .section-note { margin-top: 9px; }
+      .lane-grid, .output-grid { grid-template-columns: 1fr; }
+      .lane::after { display: none; }
+      .decoder-stages { grid-template-columns: 1fr 1fr; }
+      .decoder-stage:nth-child(2n)::after { display: none; }
+      .residual-anatomy { grid-template-columns: 1fr; }
+      .plus { margin: 0 auto; }
+      .spec-row { grid-template-columns: 1fr; }
+      footer { display: block; }
+    }
+
+    @media print {
+      @page { size: A3 landscape; margin: 10mm; }
+      :root {
+        --paper: white;
+        --surface: white;
+        --surface-solid: white;
+        --ink: #111915;
+        --muted: #4d5751;
+        --line: #cfd4d0;
+        --shadow: none;
+      }
+      body { background: white; font-size: 9pt; }
+      .page-shell { width: 100%; max-width: none; }
+      .topbar { display: none; }
+      main { padding: 0; }
+      .hero { padding: 9mm; }
+      h1 { font-size: 34pt; }
+      .summary-grid { margin-bottom: 9mm; }
+      .section { margin-top: 10mm; }
+      .hero, .summary-card, .relation-panel, .arch-card, .parameter-card, .callout, .compare-wrap { break-inside: avoid; box-shadow: none; }
+      .lane-grid, .output-grid { grid-template-columns: repeat(3, 1fr); }
+      .architecture-grid, .parameter-grid { grid-template-columns: 1fr 1fr; }
+      .arch-card.full { grid-column: 1 / -1; }
+      .callout-grid { grid-template-columns: 1.15fr 0.85fr; }
+      .decoder-stages { grid-template-columns: 0.78fr repeat(4, 1fr) 0.78fr; }
+      th { position: static; }
+      .print-hide { display: none !important; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar print-hide">
+    <div class="page-shell topbar-inner">
+      <div class="brand"><span class="brand-mark">K</span><span>架构对比报告</span></div>
+      <div class="top-actions">
+        <a href="#overview">关系总览</a>
+        <a href="#architecture">逐层结构</a>
+        <a href="#matrix">横向对比</a>
+        <button class="icon-button" id="themeToggle" type="button" aria-label="切换明暗主题">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9c0-.5-.04-.98-.12-1.45A7 7 0 0 1 13.45 3.1 9.3 9.3 0 0 0 12 3Z"/></svg>
+          <span class="button-label">主题</span>
+        </button>
+        <button class="icon-button" type="button" onclick="window.print()" aria-label="打印或导出 PDF">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 9V3h10v6M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v7H7z"/></svg>
+          <span class="button-label">打印</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="eyebrow">Current implementation · 2026-08-17</div>
+      <h1 id="page-title">3 组实验，<br>公平比较 CNN 与 ViT</h1>
+      <p class="hero-lead">
+        新协议只保留有直接解释价值的三组：<strong>CNN 原图重建、ViT 原图重建、ViT 25% Patch 掩码重建。</strong>三组都经过真实 z512 全局瓶颈，并使用同构同初始化的 residual 解码器。
+      </p>
+      <div class="hero-meta">
+        <span class="pill green">RGB · 224×224</span>
+        <span class="pill green">真实全局瓶颈 · z512</span>
+        <span class="pill">Residual Upsample Decoder</span>
+        <span class="pill">目标 · 重建原图</span>
+        <span class="pill">ViT Mask · 25%</span>
+      </div>
+    </section>
+
+    <section class="summary-grid" aria-label="核心数字">
+      <article class="summary-card">
+        <span class="summary-number">3</span>
+        <h3>实验组</h3>
+        <p>一个 CNN 基线，两个结构相同、输入不同的 ViT 对照。</p>
+      </article>
+      <article class="summary-card">
+        <span class="summary-number">2</span>
+        <h3>编码器家族</h3>
+        <p>5-stage CNN 与预训练 ViT-Tiny/16。</p>
+      </article>
+      <article class="summary-card">
+        <span class="summary-number">512</span>
+        <h3>真实瓶颈维度</h3>
+        <p>CNN 从 25,088 压缩；ViT 从四区域 768 维压缩。</p>
+      </article>
+    </section>
+
+    <section class="section" id="overview" aria-labelledby="overview-title">
+      <div class="section-head">
+        <div>
+          <span class="section-kicker">01 · Relationship map</span>
+          <h2 id="overview-title">三组网络关系总览</h2>
+        </div>
+        <p class="section-note">②与③的模型逐层一致，唯一控制变量是输入是否随机遮挡 25% Patch；①与②用于直接比较 CNN 和 ViT 编码器。</p>
+      </div>
+
+      <div class="relation-panel">
+        <div class="lane-grid">
+          <article class="lane">
+            <div class="lane-head"><div><span class="mini-label">CNN baseline</span><h3 class="lane-title">CAE 压缩重建</h3></div><span class="lane-index">①</span></div>
+            <div class="flow-box"><span class="mini-label">Input</span><span class="box-title">完整 RGB 原图</span><span class="box-copy">不做破坏 · 3×224×224</span></div>
+            <div class="flow-box encoder cnn"><span class="mini-label">Encoder A</span><span class="box-title">5-stage CNN</span><span class="box-copy">Conv4/s2 + BN + ReLU</span></div>
+            <div class="flow-box latent"><span class="mini-label">Global bottleneck</span><span class="box-title mono">25,088 → z<sup>512</sup></span><span class="box-copy">真实 512 维压缩</span></div>
+          </article>
+
+          <article class="lane vit">
+            <div class="lane-head"><div><span class="mini-label">Encoder contrast</span><h3 class="lane-title">ViT 压缩重建</h3></div><span class="lane-index">②</span></div>
+            <div class="flow-box"><span class="mini-label">Input</span><span class="box-title">完整 RGB 原图</span><span class="box-copy">与①输入完全相同</span></div>
+            <div class="flow-box encoder vit"><span class="mini-label">Encoder B</span><span class="box-title">Pretrained ViT-Tiny</span><span class="box-copy">12 blocks · 3 heads · dim 192</span></div>
+            <div class="flow-box latent"><span class="mini-label">Global bottleneck</span><span class="box-title mono">768 → z<sup>512</sup></span><span class="box-copy">2×2 空间汇聚后压缩</span></div>
+          </article>
+
+          <article class="lane vit">
+            <div class="lane-head"><div><span class="mini-label">Mask contrast</span><h3 class="lane-title">ViT 掩码重建</h3></div><span class="lane-index">③</span></div>
+            <div class="flow-box"><span class="mini-label">Input</span><span class="box-title">遮 49 / 196 Patch</span><span class="box-copy">Patch16 · 25% · 填 0.5</span></div>
+            <div class="flow-box encoder vit"><span class="mini-label">Encoder B · same</span><span class="box-title">Pretrained ViT-Tiny</span><span class="box-copy">与②结构和初始权重相同</span></div>
+            <div class="flow-box latent"><span class="mini-label">Global bottleneck</span><span class="box-title mono">768 → z<sup>512</sup></span><span class="box-copy">与②完全相同</span></div>
+          </article>
+        </div>
+
+        <div class="shared-band">
+          <span class="mini-label">Unified decoder template</span>
+          <strong>Linear → 512×7² → 4× Residual Upsample → RGB 224²</strong>
+          <p>三份实例结构相同；同 seed 时初始权重逐位一致。训练开始后各自更新，彼此不共享参数。</p>
+        </div>
+        <div class="output-grid" aria-label="三组输出">
+          <div class="output-box">x̂<sub>①</sub> · RGB 重建图</div>
+          <div class="output-box">x̂<sub>②</sub> · RGB 重建图</div>
+          <div class="output-box">x̂<sub>③</sub> · RGB 重建图</div>
+        </div>
+        <div class="legend-row" aria-label="图例">
+          <span class="legend-item"><i class="legend-swatch"></i>CNN 编码器</span>
+          <span class="legend-item"><i class="legend-swatch vit"></i>ViT 编码器</span>
+          <span class="legend-item"><i class="legend-swatch decoder"></i>统一解码器模板</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="architecture" aria-labelledby="architecture-title">
+      <div class="section-head">
+        <div>
+          <span class="section-kicker">02 · Layer by layer</span>
+          <h2 id="architecture-title">逐层网络结构</h2>
+        </div>
+        <p class="section-note">所有尺寸均省略 batch 维 B。三组都没有 encoder→decoder 的 U-Net 跳连；重建信息只能通过 z512。</p>
+      </div>
+
+      <div class="architecture-grid">
+        <article class="arch-card">
+          <header class="arch-card-head green">
+            <span class="mini-label">Encoder A · Group ①</span>
+            <h3>CAE-224 卷积编码器</h3>
+            <p>5 次精确减半，先提取局部线条与颜色，再压成一个全局向量。</p>
+          </header>
+          <div class="arch-card-body">
+            <div class="layer-chain" aria-label="CNN 编码器层级">
+              <div class="layer"><span class="layer-name">Input</span><strong class="layer-shape mono">3×224²</strong><span class="layer-op">RGB [0,1]</span></div>
+              <div class="layer focus-green"><span class="layer-name">Conv block 1</span><strong class="layer-shape mono">32×112²</strong><span class="layer-op">Conv 4×4 / s2 / p1<br>BN · ReLU</span></div>
+              <div class="layer focus-green"><span class="layer-name">Conv block 2</span><strong class="layer-shape mono">64×56²</strong><span class="layer-op">Conv 4×4 / s2 / p1<br>BN · ReLU</span></div>
+              <div class="layer focus-green"><span class="layer-name">Conv block 3</span><strong class="layer-shape mono">128×28²</strong><span class="layer-op">Conv 4×4 / s2 / p1<br>BN · ReLU</span></div>
+              <div class="layer focus-green"><span class="layer-name">Conv block 4</span><strong class="layer-shape mono">256×14²</strong><span class="layer-op">Conv 4×4 / s2 / p1<br>BN · ReLU</span></div>
+              <div class="layer focus-green"><span class="layer-name">Conv block 5</span><strong class="layer-shape mono">512×7²</strong><span class="layer-op">Conv 4×4 / s2 / p1<br>BN · ReLU</span></div>
+              <div class="layer"><span class="layer-name">Flatten</span><strong class="layer-shape mono">25,088</strong><span class="layer-op">512×7×7</span></div>
+              <div class="layer focus-blue"><span class="layer-name">Linear</span><strong class="layer-shape mono">z = 512</strong><span class="layer-op">25,088 → 512</span></div>
+            </div>
+            <div class="spec-row">
+              <div class="spec"><span>感受方式</span><strong>局部卷积，逐层扩大感受野</strong></div>
+              <div class="spec"><span>编码器参数</span><strong>15,635,360</strong></div>
+              <div class="spec"><span>跨端跳连</span><strong>无</strong></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="arch-card">
+          <header class="arch-card-head violet">
+            <span class="mini-label">Encoder B · Groups ② ③</span>
+            <h3>预训练 ViT-Tiny 编码器</h3>
+            <p>Patch16 建序列，通过全局自注意力建模，再汇聚为四个空间区域。</p>
+          </header>
+          <div class="arch-card-body">
+            <div class="layer-chain" aria-label="ViT 编码器层级">
+              <div class="layer"><span class="layer-name">Input</span><strong class="layer-shape mono">3×224²</strong><span class="layer-op">ImageNet mean/std</span></div>
+              <div class="layer focus-violet"><span class="layer-name">Patch embed</span><strong class="layer-shape mono">196×192</strong><span class="layer-op">14×14 patches<br>Patch 16×16</span></div>
+              <div class="layer focus-violet"><span class="layer-name">ViT-Tiny</span><strong class="layer-shape mono">197×192</strong><span class="layer-op">12 Transformer blocks<br>3 heads · MLP 768</span></div>
+              <div class="layer focus-violet"><span class="layer-name">Spatial pool</span><strong class="layer-shape mono">192×2×2</strong><span class="layer-op">去 CLS · 14×14→2×2<br>Flatten = 768</span></div>
+              <div class="layer focus-blue"><span class="layer-name">Projection</span><strong class="layer-shape mono">768 → 512</strong><span class="layer-op">Linear<br>真实 z = 512</span></div>
+            </div>
+            <div class="spec-row">
+              <div class="spec"><span>感受方式</span><strong>全局多头自注意力</strong></div>
+              <div class="spec"><span>编码器参数</span><strong>约 5,918,144</strong></div>
+              <div class="spec"><span>预训练</span><strong>ImageNet · backbone 0.1× LR</strong></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="arch-card full">
+          <header class="arch-card-head blue">
+            <span class="mini-label">Decoder · all three groups</span>
+            <h3>统一 Residual Upsample 解码器</h3>
+            <p>最近邻上采样避免转置卷积棋盘伪影；GroupNorm 适配小 batch；残差旁路保留低频信息。</p>
+          </header>
+          <div class="arch-card-body">
+            <div class="decoder-stages" aria-label="统一解码器层级">
+              <div class="decoder-stage edge"><span class="stage-index">FC + RESHAPE</span><strong class="stage-shape mono">z512<br>→ 512×7²</strong><span class="stage-op">Linear 512→25,088</span></div>
+              <div class="decoder-stage"><span class="stage-index">UP BLOCK 1</span><strong class="stage-shape mono">256×14²</strong><span class="stage-op">Nearest ×2<br>Residual 512→256</span></div>
+              <div class="decoder-stage"><span class="stage-index">UP BLOCK 2</span><strong class="stage-shape mono">128×28²</strong><span class="stage-op">Nearest ×2<br>Residual 256→128</span></div>
+              <div class="decoder-stage"><span class="stage-index">UP BLOCK 3</span><strong class="stage-shape mono">64×56²</strong><span class="stage-op">Nearest ×2<br>Residual 128→64</span></div>
+              <div class="decoder-stage"><span class="stage-index">UP BLOCK 4</span><strong class="stage-shape mono">32×112²</strong><span class="stage-op">Nearest ×2<br>Residual 64→32</span></div>
+              <div class="decoder-stage edge"><span class="stage-index">RGB HEAD</span><strong class="stage-shape mono">3×224²</strong><span class="stage-op">Nearest ×2<br>Conv3×3 · Sigmoid</span></div>
+            </div>
+            <div class="residual-anatomy">
+              <div class="branch"><strong>主分支</strong>Nearest ×2 → Conv3×3 → GroupNorm → SiLU → Conv3×3 → GroupNorm</div>
+              <div class="plus">+</div>
+              <div class="branch"><strong>旁路</strong>Nearest ×2 → Conv1×1（通道对齐）→ 相加 → SiLU</div>
+            </div>
+            <div class="spec-row">
+              <div class="spec"><span>解码器参数</span><strong>15,398,531</strong></div>
+              <div class="spec"><span>算子总览</span><strong>1 FC · 13 Conv · 5 Upsample</strong></div>
+              <div class="spec"><span>参数关系</span><strong>同构同初始化，各自独立训练</strong></div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="matrix" aria-labelledby="matrix-title">
+      <div class="section-head">
+        <div>
+          <span class="section-kicker">03 · Comparison matrix</span>
+          <h2 id="matrix-title">三组横向对比</h2>
+        </div>
+        <p class="section-note">表中“结构差异”只统计模型本体。输入破坏不计入网络层。</p>
+      </div>
+
+      <div class="compare-wrap">
+        <table>
+          <caption class="sr-only">三组编码器与解码器架构横向对比表</caption>
+          <thead>
+            <tr>
+              <th>对比项</th>
+              <th>① CAE(CNN) 压缩重建</th>
+              <th>② ViT 压缩重建</th>
+              <th>③ ViT 25% 掩码重建</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>输入信息</td>
+              <td>完整 RGB 原图</td>
+              <td>完整 RGB 原图，与①完全相同</td>
+              <td>14×14 网格中随机遮 49 个 Patch16，即 25%，填灰 0.5</td>
+            </tr>
+            <tr>
+              <td>编码器</td>
+              <td><strong>CAE-224 CNN</strong><br>5× Conv4/s2 + BN + ReLU</td>
+              <td><strong>预训练 ViT-Tiny/16</strong><br>12 blocks · dim192 · 3 heads</td>
+              <td><span class="status-good">同②</span><br>结构和初始权重相同</td>
+            </tr>
+            <tr>
+              <td>空间建模</td>
+              <td>局部卷积，层层汇聚</td>
+              <td>全局 self-attention</td>
+              <td>全局 self-attention</td>
+            </tr>
+            <tr>
+              <td>预训练</td>
+              <td>无，从零训练</td>
+              <td>有；ImageNet 权重，backbone 使用 0.1× 学习率</td>
+              <td>同②</td>
+            </tr>
+            <tr>
+              <td>全局瓶颈</td>
+              <td><strong>真实 512</strong><br>25,088 → Linear → 512</td>
+              <td><strong>真实 512</strong><br>196×192 → 2×2×192=768 → Linear 512</td>
+              <td><strong>真实 512</strong><br>与②相同</td>
+            </tr>
+            <tr>
+              <td>解码器</td>
+              <td>统一 residual decoder</td>
+              <td><span class="status-good">同①结构与初始化</span></td>
+              <td><span class="status-good">同①结构与初始化</span></td>
+            </tr>
+            <tr>
+              <td>跳连</td>
+              <td>仅解码器块内 residual；无 encoder→decoder 跳连</td>
+              <td>ViT block 内 residual + 解码器块内 residual；无跨瓶颈旁路</td>
+              <td>同②</td>
+            </tr>
+            <tr>
+              <td>参数量</td>
+              <td><strong>31,033,891</strong></td>
+              <td><strong>约 21,316,675</strong></td>
+              <td><strong>约 21,316,675</strong></td>
+            </tr>
+            <tr>
+              <td>主要检验</td>
+              <td>CNN 的压缩重建基线</td>
+              <td>同输入、同解码器下 CNN 与 ViT 谁更优</td>
+              <td>同一 ViT 下，25% 掩码是否改善特征学习</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="params-title">
+      <div class="section-head">
+        <div>
+          <span class="section-kicker">04 · Parameter budget</span>
+          <h2 id="params-title">参数量如何分布</h2>
+        </div>
+        <p class="section-note">②和③参数量相同；两组只改变输入掩码，不改变网络。</p>
+      </div>
+
+      <div class="parameter-grid">
+        <article class="parameter-card">
+          <h3>① · CAE residual-512</h3>
+          <div class="parameter-total"><strong>31.03M</strong> 可训练参数</div>
+          <div class="bar" aria-label="CNN 编码器 50.38%，解码器 49.62%">
+            <div class="bar-encoder" style="width:50.38%"></div>
+            <div class="bar-decoder" style="width:49.62%"></div>
+          </div>
+          <div class="bar-legend"><span><i class="encoder"></i>编码器 15.64M · 50.4%</span><span><i class="decoder"></i>解码器 15.40M · 49.6%</span></div>
+        </article>
+
+        <article class="parameter-card vit">
+          <h3>② / ③ · ViT + 统一解码器</h3>
+          <div class="parameter-total"><strong>约 21.32M</strong> 可训练参数 / 每组</div>
+          <div class="bar" aria-label="ViT 编码器 27.76%，解码器 72.24%">
+            <div class="bar-encoder" style="width:27.76%"></div>
+            <div class="bar-decoder" style="width:72.24%"></div>
+          </div>
+          <div class="bar-legend"><span><i class="encoder"></i>ViT + 768→512 投影 5.92M · 27.8%</span><span><i class="decoder"></i>解码器 15.40M · 72.2%</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="notes-title">
+      <div class="section-head">
+        <div>
+          <span class="section-kicker">05 · Reading notes</span>
+          <h2 id="notes-title">实现状态与解读边界</h2>
+        </div>
+      </div>
+
+      <div class="callout-grid">
+        <article class="callout">
+          <span class="mini-label">512-d fix</span>
+          <h3>为什么现在的 ViT 可以输出真实 z512</h3>
+          <p>ViT-Tiny 的每个 token 确实只有 192 维，但编码器共有 196 个空间 token。新实现不再先做全局均值，而是恢复为 <code>192×14×14</code> 特征图，汇聚成四个 7×7 区域。</p>
+          <p><code>192×2×2=768 → Linear(768,512)</code> 的输入维度大于输出维度，权重矩阵最多可达 rank 512；它是在压缩信息，而不是把 192 维形式扩充为 512 维。</p>
+        </article>
+
+        <article class="callout">
+          <span class="mini-label">Scope</span>
+          <h3>为什么本页不贴现有 loss 结果</h3>
+          <p><code>results/local/compare4/compare4.json</code> 属于已取消的历史四组实验；它使用旧瓶颈和旧解码器，不对应本页的新三组架构。</p>
+          <ul>
+            <li>新三组正式训练尚未执行，结果将写入独立的 <code>compare3</code> 目录。</li>
+            <li>旧曲线可用于历史观察，不能直接归因到当前网络。</li>
+            <li>“统一解码器”意为结构和初始化可控，不是三组绑定同一份权重。</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="sources-title">
+      <div class="section-head">
+        <div>
+          <span class="section-kicker">06 · Evidence</span>
+          <h2 id="sources-title">代码依据</h2>
+        </div>
+        <p class="section-note">链接为相对路径；从本 HTML 所在目录打开时可定位到项目源文件。</p>
+      </div>
+
+      <div class="source-list">
+        <a class="source-link" href="../../../src/experiment_compare3.py#L45"><strong>experiment_compare3.py</strong><span>三组定义、模型分派与统一训练协议</span></a>
+        <a class="source-link" href="../../../src/model_cae.py#L24"><strong>model_cae.py</strong><span>CAE 编码器、共享解码器构造与残差上采样块</span></a>
+        <a class="source-link" href="../../../src/model_mae.py#L30"><strong>model_mae.py</strong><span>2×2 空间汇聚、768→512 投影与预训练 ViT</span></a>
+        <a class="source-link" href="../../../src/corruptions.py#L14"><strong>corruptions.py</strong><span>Patch16 的 25% 随机遮挡</span></a>
+        <a class="source-link" href="../../../开发计划.md#L257"><strong>开发计划.md</strong><span>阶段13三组协议与真实 z512 设计</span></a>
+        <a class="source-link" href="../../../tests/test_mae.py#L25"><strong>test_mae.py</strong><span>四区域汇聚与统一解码器一致性测试</span></a>
+      </div>
+    </section>
+
+    <footer>
+      <span>生成依据：当前工作区源码 · compare3 默认方法 <code>cae,vit_recon,vit_mask</code></span>
+      <span>报告口径日期：2026-08-17 · 支持离线浏览与 A3 横向打印</span>
+    </footer>
+  </main>
+
+  <script>
+    (function () {
+      const root = document.documentElement;
+      const button = document.getElementById('themeToggle');
+      let saved = null;
+      try {
+        saved = localStorage.getItem('architecture-report-theme');
+      } catch (error) {
+        // 某些浏览器会对 file:// 页禁用存储；主题切换本身仍应可用。
+      }
+      if (saved === 'dark' || saved === 'light') {
+        root.dataset.theme = saved;
+      } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        root.dataset.theme = 'dark';
+      }
+      button.addEventListener('click', function () {
+        const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+        root.dataset.theme = next;
+        try {
+          localStorage.setItem('architecture-report-theme', next);
+        } catch (error) {
+          // 无存储权限时只在当前页面会话内切换。
+        }
+      });
+    }());
+  </script>
+</body>
+</html>

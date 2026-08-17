@@ -1,23 +1,23 @@
 # -*- coding: utf-8 -*-
-"""四组"破坏重建"对照实验（流程位置：阶段 11 主实验脚本）
+"""三组编码器/掩码对照实验（流程位置：阶段 13 主实验脚本）
 
-实验协议（见 开发计划.md 阶段 11，由用户确定）：
+实验协议（见 开发计划.md 阶段 13，2026-08-17 更新）：
     - 数据：只用 2×2 均值降采样的 224×224 图（pic_to_224x224/）
-    - 划分：7:1:2 训练/验证/测试（seed 固定），四组共用同一划分
+    - 划分：7:1:2 训练/验证/测试（seed 固定），三组共用同一划分
     - 每组 20 epoch，纯 MSE 损失；逐 epoch 记录训练/验证/测试三条 loss
-    - 四组目标统一为"从(被破坏的)输入重建原图"，损失可横向比较：
-        cae     组① 输入=原图（不破坏，压缩重建基线，CAE-224）
-        inpaint 组② 输入=随机挖矩形块（CAE-224）
-        mae     组③ 输入=按16×16网格遮75%（ViT-Tiny 从零）
-        color   组④ 输入=灰度化（CAE-224）
+    - 三组目标统一为"从输入重建原图"，损失可横向比较：
+        cae        组① 原图 → CAE-224 CNN 编码器
+        vit_recon  组② 原图 → 预训练 ViT-Tiny 编码器
+        vit_mask   组③ 25% patch 遮挡图 → 同款预训练 ViT-Tiny 编码器
+    - 三组都经过真实 512 维全局瓶颈，并使用同构同初始化的解码器
     - 验证/测试的破坏图案用固定种子，保证逐 epoch 曲线平滑可比
 
 产出：
-    results/compare4/compare4.json     全部损失历史与配置
-    results/compare4/loss_curves.png   每组三条曲线 + 四组验证集对比
+    results/<机器>/compare3/compare3.json       全部损失历史与配置
+    results/<机器>/compare3/loss_curves*.png    三组损失曲线
 
 用法（1 万张就位后，在项目根目录）：
-    python src/experiment_compare4.py --img-dir pic_to_224x224 --epochs 20
+    python src/experiment_compare3.py --img-dir pic_to_224x224 --epochs 20
 """
 
 import argparse
@@ -32,16 +32,16 @@ from torch.utils.data import DataLoader
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.corruptions import erase_rects, mask_patches, to_grayscale
+from src.corruptions import MASK_RATIO, mask_patches
 from src.dataset import KLineDataset
 from src.logger import get_logger, setup_logger
 from src.machine import get_machine_tag
 from src.model_cae import CAE
-from src.model_mae import MAE
+from src.model_mae import MAEUnified
 from src.split import split_files
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-log = get_logger("compare4")
+log = get_logger("compare3")
 
 # 结果按机器分文件夹隔离（results/<机器标识>/...），多机跑同名实验
 # 也不会产生 git 冲突；标识来源见 get_machine_tag
@@ -49,22 +49,16 @@ MACHINE = get_machine_tag()
 
 # 方法定义：名称 -> (中文标签, 破坏函数)；破坏函数签名 f(x, generator)
 METHODS = {
-    "cae": ("① CAE压缩重建", lambda x, g: x),  # 不破坏
-    "inpaint": ("② 遮挡修复", lambda x, g: erase_rects(x, generator=g)),
-    "mae": ("③ MAE(ViT从零)", lambda x, g: mask_patches(x, generator=g)),
-    "color": ("④ 去色重彩", lambda x, g: to_grayscale(x)),
-    # ③′：与 ③ 同样的破坏方式，但编码器换成 ImageNet 预训练 ViT-Tiny，
-    # 用于对照"从零 vs 预训练"（运行前需设 HF_HOME 指向权重缓存盘）
-    "mae_pre": ("③′ MAE(ViT预训练)", lambda x, g: mask_patches(x, generator=g)),
-    # ③″：统一解码器版（阶段11h）——预训练 ViT 编码器 + 投影瓶颈 +
-    # CAE 同款解码器，与 cae/inpaint/color 三组解码器初始权重逐位一致
-    "mae_uni": ("③″ MAE(ViT预训练·统一解码器)",
-                lambda x, g: mask_patches(x, generator=g)),
+    "cae": ("① CAE(CNN)压缩重建", lambda x, g: x),
+    "vit_recon": ("② ViT压缩重建", lambda x, g: x),
+    "vit_mask": (
+        "③ ViT掩码重建(25%)",
+        lambda x, g: mask_patches(x, ratio=MASK_RATIO, generator=g),
+    ),
 }
 # 验证/测试破坏图案的固定种子（与训练随机破坏区分开）
 EVAL_CORRUPT_SEED = 12345
-# 正式对照统一使用真实 512 维接口；旧版 mae/mae_pre 固定 192 维，仅保留
-# 历史复现用途，不属于当前统一维度协议。
+# 正式对照统一使用真实 512 维全局瓶颈。
 FEATURE_DIM = 512
 # 新实验采用适度增强的 GroupNorm 残差解码器；legacy 仍可加载历史模型。
 SHARED_DECODER_VARIANT = "residual"
@@ -72,7 +66,7 @@ SHARED_DECODER_VARIANT = "residual"
 
 def parse_args():
     """解析命令行参数"""
-    parser = argparse.ArgumentParser(description="四组破坏重建对照实验")
+    parser = argparse.ArgumentParser(description="三组编码器/掩码重建对照实验")
     parser.add_argument("--img-dir", default=os.path.join(ROOT, "pic_to_224x224"),
                         help="224×224 图片目录")
     parser.add_argument("--epochs", type=int, default=20, help="每组训练轮数")
@@ -81,12 +75,12 @@ def parse_args():
     parser.add_argument("--latent-dim", type=int, default=FEATURE_DIM,
                         help="统一特征维度（正式实验固定为512）")
     parser.add_argument("--seed", type=int, default=42, help="划分与初始化种子")
-    # 默认输出按机器分文件夹（results/<机器标识>/compare4），防多机 git 冲突
+    # 默认输出按机器分文件夹（results/<机器标识>/compare3），防多机 git 冲突
     parser.add_argument("--out-dir",
-                        default=os.path.join(ROOT, "results", MACHINE, "compare4"))
+                        default=os.path.join(ROOT, "results", MACHINE, "compare3"))
     parser.add_argument("--ckpt-dir",
-                        default=os.path.join(ROOT, "checkpoints", MACHINE, "compare4"))
-    parser.add_argument("--methods", default="cae,inpaint,color,mae_uni",
+                        default=os.path.join(ROOT, "checkpoints", MACHINE, "compare3"))
+    parser.add_argument("--methods", default="cae,vit_recon,vit_mask",
                         help="逗号分隔的方法子集（调试用）")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
@@ -95,24 +89,20 @@ def parse_args():
 def build_model(method: str, latent_dim: int, seed: int) -> torch.nn.Module:
     """按方法名构造模型
 
-    seed 用作**解码器初始化种子**：cae/inpaint/color/mae_uni 四组的解码器
-    由此保证初始权重逐位一致（严格控制变量，见 build_decoder）。
-    mae/mae_pre 是早期方案（线性 token 解码头），保留供历史对照。
+    seed 用作解码器初始化种子：三组解码器初始权重逐位一致。
+    两个 ViT 组实例化同一个模型类，唯一差异是输入是否遮挡 25%。
     """
-    if method == "mae":
-        return MAE()
-    if method == "mae_pre":
-        return MAE(pretrained=True)
-    if method == "mae_uni":
-        from src.model_mae import MAEUnified
+    if method == "cae":
+        return CAE(
+            latent_dim=latent_dim, input_size=224, decoder_init_seed=seed,
+            decoder_variant=SHARED_DECODER_VARIANT,
+        )
+    if method in {"vit_recon", "vit_mask"}:
         return MAEUnified(
             latent_dim=latent_dim, decoder_init_seed=seed,
             decoder_variant=SHARED_DECODER_VARIANT,
         )
-    return CAE(
-        latent_dim=latent_dim, input_size=224, decoder_init_seed=seed,
-        decoder_variant=SHARED_DECODER_VARIANT,
-    )
+    raise ValueError(f"未知实验方法: {method}；可选值为 {list(METHODS)}")
 
 
 def make_optimizer(model: torch.nn.Module, lr: float):
@@ -187,13 +177,13 @@ def plot_in_subprocess(json_path: str, plot_path: str):
 
     本机 torch 与 anaconda MKL 各带一份 OpenMP 运行时（OMP Error #15），
     同进程混用 torch 和 matplotlib 会直接崩溃；绘图逻辑在
-    src/plot_compare4.py，其进程内只有 matplotlib，不会触发冲突。
+    src/plot_compare3.py，其进程内只有 matplotlib，不会触发冲突。
 
     参数:
-        json_path: 已写好的 compare4.json 路径
+        json_path: 已写好的 compare3.json 路径
         plot_path: 输出 PNG 路径
     """
-    script = os.path.join(ROOT, "src", "plot_compare4.py")
+    script = os.path.join(ROOT, "src", "plot_compare3.py")
     # sys.executable 是当前 Python 解释器路径，保证子进程用同一环境
     result = subprocess.run(
         [sys.executable, script, "--json", json_path, "--out", plot_path],
@@ -275,10 +265,7 @@ def train_one_method(method: str, loaders: tuple, args, device) -> dict:
         log.info("[%s] epoch %2d/%d | 训练 %.5f | 验证 %.5f | 测试 %.5f | %ds",
                  label, ep, args.epochs, tr, va, te, time.time() - t0)
 
-    # 每组各存一个 checkpoint，便于后续复用编码器提特征。
-    # latent_dim 记录模型的**真实**特征维度（三类模型契约统一为该属性）：
-    # mae/mae_pre 的维度固定为 192，与命令行 --latent-dim 无关，
-    # 若记录 args.latent_dim 会误导后续加载方
+    # 每组各存一个 checkpoint，便于后续复用编码器提取真实 z512 特征。
     torch.save({"model_state": model.state_dict(), "method": method,
                 "latent_dim": model.latent_dim, "epochs": args.epochs,
                 "pre_projection_dim": getattr(model, "pre_projection_dim", None),
@@ -291,19 +278,26 @@ def merge_and_save_history(json_path: str, history: dict, args,
                            split_sizes: dict) -> dict:
     """与既有结果 JSON 合并后写盘，返回合并后的完整 history
 
-    合并规则：单独重跑某一组（如 --methods mae_uni）时，新曲线并入旧
-    compare4.json，同名方法被本次结果覆盖，出图时新旧方法同框对比。
+    合并规则：单独重跑某一组时，新曲线并入旧 compare3.json，同名方法
+    被本次结果覆盖；已取消的旧方法不会混入当前三组结果。
     """
     if os.path.isfile(json_path):
         with open(json_path, encoding="utf-8") as f:
             old = json.load(f).get("history", {})
+        old = {method: values for method, values in old.items()
+               if method in METHODS}
         if old:
             log.info("检测到已有结果（%s），合并后同图对比", ",".join(old))
         # 字典解包合并：old 在前 history 在后，本次结果覆盖同名旧结果
         history = {**old, **history}
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump({
-            "protocol": "仅用224降采样图; 7:1:2划分; 统一MSE重建原图",
+            "protocol": (
+                "224降采样图; 7:1:2划分; 真实z512; 统一residual解码器; "
+                "ViT掩码率25%; 纯MSE重建原图"
+            ),
+            "methods": list(METHODS),
+            "mask_ratio": MASK_RATIO,
             "epochs": args.epochs, "seed": args.seed,
             "split": split_sizes,
             "history": history,
@@ -328,12 +322,15 @@ def run_compare(args) -> dict:
              args.epochs, device)
 
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
+    unknown = [method for method in methods if method not in METHODS]
+    if unknown:
+        raise ValueError(f"未知实验方法 {unknown}；可选值为 {list(METHODS)}")
     history = {}
     for method in methods:
         history[method] = train_one_method(
             method, (train_loader, val_loader, test_loader), args, device)
 
-    json_path = os.path.join(args.out_dir, "compare4.json")
+    json_path = os.path.join(args.out_dir, "compare3.json")
     history = merge_and_save_history(json_path, history, args, sizes)
 
     # 文件名带最大轮数（如 loss_curves_by_split_50ep.png）：

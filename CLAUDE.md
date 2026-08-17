@@ -34,4 +34,4 @@
   只在本机改，203 只跑实验并提交 `results/203/`；push 前先 pull。
 - 本机环境坑：C 盘已满（大文件一律 D 盘，HF_HOME=D:\hf_cache）；
   torch 与 matplotlib 同进程混用会因 OpenMP 冲突崩溃（绘图走子进程，
-  见 src/plot_compare4.py）。
+  见 src/plot_compare3.py）。

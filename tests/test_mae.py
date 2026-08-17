@@ -15,7 +15,24 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.model_mae import EMBED_DIM, MAE
+from src.model_mae import (EMBED_DIM, SPATIAL_FEATURE_DIM, MAE,
+                           spatial_pool_tokens)
+
+
+def test_spatial_pool_preserves_four_regions():
+    """2×2 空间汇聚应保留四个区域，而不是先压成单个192维均值。"""
+    grid = torch.zeros(1, 14, 14, 1)
+    grid[:, :7, :7] = 1.0
+    grid[:, :7, 7:] = 2.0
+    grid[:, 7:, :7] = 3.0
+    grid[:, 7:, 7:] = 4.0
+    tokens = grid.reshape(1, 14 * 14, 1)
+    pooled = spatial_pool_tokens(tokens)
+    assert pooled.shape == (1, 4)
+    assert torch.equal(pooled, torch.tensor([[1.0, 2.0, 3.0, 4.0]]))
+
+    full_width = spatial_pool_tokens(torch.rand(2, 196, EMBED_DIM))
+    assert full_width.shape == (2, SPATIAL_FEATURE_DIM) == (2, 768)
 
 
 def test_forward_shapes_and_range():
@@ -138,7 +155,10 @@ def test_unified_decoder_identical_across_models():
     x_hat, z = uni(x)
     assert x_hat.shape == (2, 3, 224, 224)
     assert z.shape == (2, 512)
-    assert uni.pre_projection_dim == 192
+    assert uni.pre_projection_dim == SPATIAL_FEATURE_DIM == 768
+    assert uni.pre_projection_dim >= uni.latent_dim, (
+        "投影前维度必须不小于 z512，禁止重新引入192→512形式扩维"
+    )
     ((x_hat - x) ** 2).mean().backward()
     for name, p in uni.named_parameters():
         assert p.grad is not None, f"参数 {name} 无梯度"

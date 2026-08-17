@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""阶段 11d 测试关卡：四组对照实验脚本（机制测试）
+"""阶段 13 测试关卡：三组对照实验脚本（机制测试）
 
 通过标准（见 开发计划.md 第三期）：
-    1. 小样本（夹具36张降采样）小轮数（2 epoch）四组全部跑通
+    1. 小样本（夹具36张降采样）小轮数（2 epoch）三组全部跑通
     2. 每组的 train/val/test 损失历史长度 = epoch 数，值有限且为正
     3. JSON 与 loss 曲线 PNG 文件生成
-    4. 四组 checkpoint 各自保存
+    4. 三组 checkpoint 各自保存
 
-说明：机制测试不要求损失低（2 epoch 训不出来），指标由 11e 正式实验负责。
+说明：机制测试不要求损失低（2 epoch 训不出来），正式实验另行验收。
 """
 
 import argparse
@@ -21,16 +21,62 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.experiment_compare4 import METHODS, run_compare
+import src.experiment_compare3 as compare3
+from src.experiment_compare3 import METHODS, run_compare
 from src.prepare_224 import downsample_one
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE_DIR = os.path.join(ROOT, "tests", "fixtures", "kline36")
-TMP_DIR = os.path.join(ROOT, "tests", "_cmp4_tmp")
+TMP_DIR = os.path.join(ROOT, "tests", "_cmp3_tmp")
 
 
-def test_compare4_machinery():
-    """全流程机制测试：夹具 36 张 → 降采样 → 四组 × 2 epoch"""
+class TinyAutoencoder(torch.nn.Module):
+    """隔离外部预训练权重的轻量模型，只验证实验编排契约。"""
+
+    def __init__(self, latent_dim: int, use_backbone: bool):
+        super().__init__()
+        feature_dim = 4
+        if use_backbone:
+            # 名称必须是 backbone.*，同时覆盖预训练模型的分组学习率路径。
+            self.backbone = torch.nn.Conv2d(3, feature_dim, kernel_size=1)
+        else:
+            self.encoder_conv = torch.nn.Conv2d(3, feature_dim, kernel_size=1)
+        self.encoder_fc = torch.nn.Linear(feature_dim, latent_dim)
+        self.output = torch.nn.Linear(latent_dim, 3)
+        self.latent_dim = latent_dim
+        self.pre_projection_dim = latent_dim
+        self.decoder_variant = "test_tiny"
+
+    def forward(self, x):
+        """返回符合正式模型契约的重建图与特征向量。"""
+        encoder = self.backbone if hasattr(self, "backbone") else self.encoder_conv
+        feature = encoder(x).mean(dim=(2, 3))
+        z = self.encoder_fc(feature)
+        rgb = torch.sigmoid(self.output(z)).view(-1, 3, 1, 1)
+        return rgb.expand(-1, -1, x.shape[2], x.shape[3]), z
+
+    def count_parameters(self):
+        """返回可训练参数量。"""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+def fake_build_model(method: str, latent_dim: int, seed: int):
+    """为三组实验返回轻量替身；seed 保留正式构造函数签名。"""
+    del seed
+    return TinyAutoencoder(latent_dim, use_backbone=method.startswith("vit_"))
+
+
+def test_active_methods_are_exactly_three():
+    """已取消的遮挡修复/去色重彩不得继续留在训练入口。"""
+    assert list(METHODS) == ["cae", "vit_recon", "vit_mask"]
+
+
+def test_compare3_machinery(monkeypatch):
+    """全流程机制测试：夹具 36 张 → 降采样 → 三组 × 2 epoch。
+
+    用小型替身模型隔离预训练权重下载；真实 ViT 结构由 test_mae.py 覆盖。
+    """
+    monkeypatch.setattr(compare3, "build_model", fake_build_model)
     img224 = os.path.join(TMP_DIR, "img224")
     os.makedirs(img224, exist_ok=True)
     try:
@@ -45,12 +91,12 @@ def test_compare4_machinery():
             latent_dim=64, seed=42,
             out_dir=os.path.join(TMP_DIR, "out"),
             ckpt_dir=os.path.join(TMP_DIR, "ckpt"),
-            methods="cae,inpaint,mae,color",
+            methods="cae,vit_recon,vit_mask",
             device="cuda" if torch.cuda.is_available() else "cpu",
         )
         result = run_compare(args)
 
-        # 关卡 1+2：请求的四组齐全，历史长度正确，损失有限且为正
+        # 关卡 1+2：请求的三组齐全，历史长度正确，损失有限且为正
         history = result["history"]
         requested = set(args.methods.split(","))
         assert requested <= set(METHODS), "测试请求了未定义的方法"
@@ -82,7 +128,7 @@ def test_make_optimizer_by_structure():
     含 backbone.* 参数的模型 → 两组学习率（主干 0.1x）；
     不含的 → 单组统一学习率。不依赖任何具体方法名。
     """
-    from src.experiment_compare4 import make_optimizer
+    from src.experiment_compare3 import make_optimizer
 
     class FakePretrained(torch.nn.Module):
         """带 backbone 子模块的假模型（模拟预训练微调场景）"""
@@ -104,7 +150,7 @@ def test_make_optimizer_by_structure():
 def test_plot_mixed_lengths():
     """混合长度曲线出图：合并 20ep 与 50ep 历史时画图不应崩溃
 
-    绘图必须走子进程（plot_compare4.py 不 import torch）：
+    绘图必须走子进程（plot_compare3.py 不 import torch）：
     本测试进程里已加载 torch，进程内直接 import matplotlib 会触发
     OpenMP 运行时冲突崩溃，见 开发计划.md 阶段 11 开发备注。
     """
@@ -123,7 +169,7 @@ def test_plot_mixed_lengths():
             json.dump({"epochs": 6, "history": history}, f, ensure_ascii=False)
 
         png_path = os.path.join(TMP_DIR, "mixed.png")
-        script = os.path.join(ROOT, "src", "plot_compare4.py")
+        script = os.path.join(ROOT, "src", "plot_compare3.py")
         result = subprocess.run(
             [sys.executable, script, "--json", json_path, "--out", png_path],
             capture_output=True, text=True,
@@ -134,8 +180,9 @@ def test_plot_mixed_lengths():
         shutil.rmtree(TMP_DIR, ignore_errors=True)
 
 
-def test_merge_rerun():
-    """合并逻辑（阶段11f）：分两次各跑一组，第二次应并入第一次的结果同图对比"""
+def test_merge_rerun(monkeypatch):
+    """合并逻辑：分两次各跑一组，第二次应并入第一次的结果同图对比。"""
+    monkeypatch.setattr(compare3, "build_model", fake_build_model)
     img224 = os.path.join(TMP_DIR, "img224")
     os.makedirs(img224, exist_ok=True)
     try:
@@ -153,15 +200,15 @@ def test_merge_rerun():
                 device="cuda" if torch.cuda.is_available() else "cpu",
             )
 
-        run_compare(make_args("cae"))            # 第一次：只跑 cae
-        result = run_compare(make_args("inpaint"))  # 第二次：只跑 inpaint
+        run_compare(make_args("cae"))
+        result = run_compare(make_args("vit_recon"))
 
         # 第二次的 history 应同时含两组（旧结果被读入合并）
-        assert set(result["history"]) == {"cae", "inpaint"}, (
+        assert set(result["history"]) == {"cae", "vit_recon"}, (
             f"合并失败: {list(result['history'])}"
         )
         with open(result["json_path"], encoding="utf-8") as f:
             saved = json.load(f)
-        assert set(saved["history"]) == {"cae", "inpaint"}, "JSON 未包含合并结果"
+        assert set(saved["history"]) == {"cae", "vit_recon"}, "JSON 未包含合并结果"
     finally:
         shutil.rmtree(TMP_DIR, ignore_errors=True)

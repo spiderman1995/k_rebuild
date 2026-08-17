@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-"""四组对照实验的 loss 曲线绘图（独立进程运行，流程位置：compare4 的出图环节）
+"""三组对照实验的 loss 曲线绘图（独立进程运行，流程位置：compare3）
 
 为什么单独成文件：本机 torch 自带的 OpenMP 运行时与 anaconda MKL 的
 OpenMP 运行时冲突（OMP Error #15），torch 和 matplotlib 在同一进程里
-混用会直接崩溃。因此本模块**不 import torch**，由 experiment_compare4.py
+混用会直接崩溃。因此本模块**不 import torch**，由 experiment_compare3.py
 用子进程调用，画图进程里只有 matplotlib，冲突不会发生。
 
-用法（一般由 experiment_compare4 自动调用，也可手动重画）：
-    python src/plot_compare4.py --json results/compare4/compare4.json ^
-           --out results/compare4/loss_curves.png
+用法（一般由 experiment_compare3 自动调用，也可手动重画）：
+    python src/plot_compare3.py --json results/local/compare3/compare3.json ^
+           --out results/local/compare3/loss_curves.png
 """
 
 import argparse
@@ -58,9 +58,9 @@ def plot_curves(history: dict, out_path: str):
 
 
 def main():
-    """命令行入口：从 compare4.json 读取历史并出图"""
-    parser = argparse.ArgumentParser(description="compare4 loss 曲线绘图")
-    parser.add_argument("--json", required=True, help="compare4.json 路径")
+    """命令行入口：从 compare3.json 读取历史并出图"""
+    parser = argparse.ArgumentParser(description="compare3 loss 曲线绘图")
+    parser.add_argument("--json", required=True, help="compare3.json 路径")
     parser.add_argument("--out", required=True, help="输出 PNG 路径")
     args = parser.parse_args()
 

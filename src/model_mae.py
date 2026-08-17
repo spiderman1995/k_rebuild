@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MAE 模型：ViT-Tiny 编码器 + 轻量解码头（流程位置：四组对照的组③）
+"""ViT 重建模型：旧 MAE 兼容实现 + 当前三组对照的统一解码器模型。
 
 设计（见 开发计划.md 阶段 11 实验协议）：
     - 输入是"已被 mask_patches 破坏的整图"（SimMIM 风格的全序列输入，
@@ -26,6 +26,40 @@ N_PATCHES = (IMG_SIZE // PATCH) ** 2   # 14*14 = 196 个 patch
 EMBED_DIM = 192
 DEPTH = 6
 N_HEADS = 3
+# 2×2 空间汇聚保留四个粗粒度区域，每区 192 维；768→512 的投影
+# 最多可达 rank 512，避免旧版全局均值先压到 192 再形式扩维。
+POOL_GRID = 2
+SPATIAL_FEATURE_DIM = EMBED_DIM * POOL_GRID * POOL_GRID
+
+
+def spatial_pool_tokens(tokens: torch.Tensor,
+                        pool_grid: int = POOL_GRID) -> torch.Tensor:
+    """把 ViT patch token 恢复为空间网格并汇聚为多区域特征。
+
+    参数:
+        tokens:    patch token，shape (B, N, C)，N 必须是平方数
+        pool_grid: 输出空间网格边长；默认 2，即保留四个区域
+    返回:
+        pooled: shape (B, C*pool_grid*pool_grid)；ViT-Tiny 默认 (B,768)
+
+    与 token 全局均值不同，本函数不会先把整个序列压成单个 192 维向量。
+    2×2 区域各保留 192 维，再投影到 z512，线性映射可具有 512 的满秩。
+    """
+    if tokens.ndim != 3:
+        raise ValueError(f"tokens 应为 (B,N,C)，收到 shape={tuple(tokens.shape)}")
+    b, n_tokens, channels = tokens.shape
+    grid = int(n_tokens ** 0.5)
+    if grid * grid != n_tokens:
+        raise ValueError(f"token 数 {n_tokens} 不能恢复成正方形空间网格")
+    if pool_grid < 1 or pool_grid > grid:
+        raise ValueError(f"pool_grid 应在 [1,{grid}]，收到 {pool_grid}")
+
+    # (B,N,C) → (B,C,H,W)，让池化在 token 的二维空间位置上进行。
+    feature_map = tokens.transpose(1, 2).reshape(b, channels, grid, grid)
+    pooled = torch.nn.functional.adaptive_avg_pool2d(
+        feature_map, output_size=(pool_grid, pool_grid)
+    )
+    return pooled.flatten(1)
 
 
 class MAE(nn.Module):
@@ -143,18 +177,20 @@ class MAE(nn.Module):
 
 
 class MAEUnified(nn.Module):
-    """统一解码器版：预训练 ViT-Tiny 编码器 + 投影瓶颈 + CAE 同款解码器
+    """统一解码器版：预训练 ViT-Tiny 编码器 + 真实512瓶颈 + CAE解码器
 
-    为"四组解码器完全一致"的对照实验（开发计划 阶段 11h）而设：
-        编码器: timm 预训练 ViT-Tiny → 196 个 patch token 均值池化 (B,192)
-                → 线性投影到 latent_dim 维特征 z（显式全局瓶颈，
-                与 CAE 组的信息通道等价——这是与 MAE 类的关键差别）
+    用于当前三组严格对照中的两个 ViT 组：
+        编码器: timm 预训练 ViT-Tiny → 196 个 patch token
+                → 恢复 14×14 空间布局 → 自适应池化为 2×2
+                → 展平 (B,192×2×2=768) → Linear 到 z512
+        该路径投影前有 768 个特征，消除了旧版 mean-pool 192→512
+        只能形式扩维、信息秩最多 192 的问题。
         解码器: 与 CAE-224 **同结构**（build_decoder 构造），配合
                 decoder_init_seed 可与 CNN 组做到**初始权重逐位一致**
 
     参数:
         latent_dim:        特征 z 维度（与 CNN 组保持一致，默认 512）
-        decoder_init_seed: 解码器初始化种子（四组传同一值即严格控制变量）
+        decoder_init_seed: 解码器初始化种子（三组传同一值即严格控制变量）
         decoder_variant:   共享解码器版本；新实验使用 residual，legacy 用于
                            兼容历史 checkpoint
     """
@@ -169,7 +205,8 @@ class MAEUnified(nn.Module):
                                    build_decoder)
 
         self.latent_dim = latent_dim
-        self.pre_projection_dim = EMBED_DIM
+        self.pre_projection_dim = SPATIAL_FEATURE_DIM
+        self.pool_grid = POOL_GRID
         self.decoder_variant = decoder_variant
         self.backbone = timm.create_model(
             "vit_tiny_patch16_224.augreg_in21k_ft_in1k",
@@ -180,8 +217,8 @@ class MAEUnified(nn.Module):
             "in_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
         self.register_buffer(
             "in_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
-        # 投影瓶颈：token 池化向量 (B,192) -> 特征 z (B,latent_dim)
-        self.proj = nn.Linear(EMBED_DIM, latent_dim)
+        # 投影瓶颈：四区域 token 汇聚 (B,768) -> 真实 z (B,latent_dim)。
+        self.proj = nn.Linear(self.pre_projection_dim, latent_dim)
         # CAE 同款解码器（224 版），种子固定时与 CNN 组初始权重逐位一致
         self.decoder_fc, self.decoder_conv = build_decoder(
             latent_dim, input_size=224, init_seed=decoder_init_seed,
@@ -199,8 +236,10 @@ class MAEUnified(nn.Module):
             z: 特征向量, shape (B, latent_dim)
         """
         x = (x - self.in_mean) / self.in_std
-        # forward_features 输出 (B,197,192)，去掉第 0 个 CLS token 后均值池化
-        pooled = self.backbone.forward_features(x)[:, 1:].mean(dim=1)
+        # forward_features 输出 (B,197,192)；去掉 CLS 后仍保留全部196个
+        # patch token 的空间信息，再汇聚成 2×2×192=768 维区域特征。
+        tokens = self.backbone.forward_features(x)[:, 1:]
+        pooled = spatial_pool_tokens(tokens, self.pool_grid)
         return self.proj(pooled)
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
